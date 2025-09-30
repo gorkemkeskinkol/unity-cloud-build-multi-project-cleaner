@@ -17,18 +17,25 @@
 ---
 
 ## 2. Unity Cloud Build API Integration (UCBAI)
-**Sorumluluk**: Unity Cloud Build REST API ile iletişim
+**Sorumluluk**: Unity Cloud Build REST API ile iletişim (CORS çözümü ile server-side proxy)
 
 ### Ana İşlevler
 - Organizations, projects, build targets listeleme
 - Build count sayma işlemleri
 - HTTP error handling ve retry logic
 - Rate limiting ve timeout yönetimi
+- CORS bypass için Next.js API routes proxy
 
 ### Teknolojiler
-- Fetch API / Axios
-- TanStack React Query (caching & state)
-- Custom hooks için abstraction layer
+- Next.js API Routes (server-side proxy)
+- Fetch API (client-side)
+- Custom API client abstraction
+- Server-side Unity API authentication
+
+### Mimarisi
+- **Client-side**: `/api/unity/` endpoints'lerini çağırır
+- **Server-side**: Unity Cloud Build API'sine proxy yapar
+- **Güvenlik**: API key'ler server-side environment'ta kalır
 
 ---
 

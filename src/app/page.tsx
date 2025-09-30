@@ -215,6 +215,7 @@ function Dashboard({ config }: { config: AppConfig }) {
   });
   const [scanResults, setScanResults] = useState<any>(null);
   const [scanner] = useState(() => new ScanOrchestrator());
+  const [limitProjects, setLimitProjects] = useState<number | undefined>(5); // Default 5 proje
   const { addLog } = useLog();
 
   useEffect(() => {
@@ -229,7 +230,7 @@ function Dashboard({ config }: { config: AppConfig }) {
       addLog('info', 'Scan başlatılıyor...', 'Dashboard');
       
       const results = await scanner.startScan({
-        limitProjects: config.limitProjects,
+        limitProjects: 5, // Test için sadece 5 proje
         limitTargets: config.limitTargets
       });
       
@@ -286,42 +287,84 @@ function Dashboard({ config }: { config: AppConfig }) {
 
       {/* Scan Controls */}
       <div style={{
-        display: 'flex',
-        gap: '10px',
+        backgroundColor: '#f8f9fa',
+        padding: '15px',
+        borderRadius: '4px',
         marginBottom: '20px'
       }}>
-        <button
-          onClick={startScan}
-          disabled={scanProgress.isScanning}
-          style={{
-            padding: '12px 24px',
-            backgroundColor: scanProgress.isScanning ? '#ccc' : '#28a745',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: scanProgress.isScanning ? 'not-allowed' : 'pointer',
-            fontSize: '16px'
-          }}
-        >
-          {scanProgress.isScanning ? 'Scanning...' : 'Start Project Scan'}
-        </button>
-
-        {scanProgress.canCancel && (
+        <div style={{
+          display: 'flex',
+          gap: '15px',
+          alignItems: 'center',
+          marginBottom: '15px'
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}>
+            <label htmlFor="limitProjects" style={{ fontWeight: 'bold', minWidth: '120px' }}>
+              Project Limit:
+            </label>
+            <input
+              id="limitProjects"
+              type="number"
+              min="1"
+              max="1000"
+              value={limitProjects || ''}
+              onChange={(e) => setLimitProjects(e.target.value ? parseInt(e.target.value) : undefined)}
+              placeholder="Boş = tümü"
+              disabled={scanProgress.isScanning}
+              style={{
+                width: '120px',
+                padding: '8px',
+                border: '1px solid #ccc',
+                borderRadius: '4px'
+              }}
+            />
+            <span style={{ color: '#666', fontSize: '14px' }}>
+              (boş bırakılırsa tüm projeler taranır)
+            </span>
+          </div>
+        </div>
+        
+        <div style={{
+          display: 'flex',
+          gap: '10px'
+        }}>
           <button
-            onClick={cancelScan}
+            onClick={startScan}
+            disabled={scanProgress.isScanning}
             style={{
               padding: '12px 24px',
-              backgroundColor: '#ffc107',
-              color: 'black',
+              backgroundColor: scanProgress.isScanning ? '#ccc' : '#28a745',
+              color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer',
+              cursor: scanProgress.isScanning ? 'not-allowed' : 'pointer',
               fontSize: '16px'
             }}
           >
-            Cancel Scan
+            {scanProgress.isScanning ? 'Scanning...' : 'Start Project Scan'}
           </button>
-        )}
+
+          {scanProgress.canCancel && (
+            <button
+              onClick={cancelScan}
+              style={{
+                padding: '12px 24px',
+                backgroundColor: '#ffc107',
+                color: 'black',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '16px'
+              }}
+            >
+              Cancel Scan
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Progress Indicator */}

@@ -1,6 +1,7 @@
 import { ContentRangeInfo } from '@/types';
 
-const BASE_URL = 'https://build-api.cloud.unity3d.com/api/v1';
+// Artık kendi Next.js API routes'larımızı kullanıyoruz
+const BASE_URL = '/api/unity';
 
 export class ApiClient {
   private orgId: string;
@@ -11,18 +12,19 @@ export class ApiClient {
     this.orgId = orgId;
     this.apiKey = apiKey;
     
-    // Python scriptindeki AUTH = base64.b64encode(f":{API_KEY}".encode()).decode()
-    const auth = btoa(`:${apiKey}`);
-    
+    // API key'i custom header olarak gönderiyoruz
     this.headers = {
-      'Authorization': `Basic ${auth}`,
+      'x-api-key': apiKey,
       'Accept': 'application/json',
-      'User-Agent': 'unity-cloud-build-multi-project-cleaner/1.0'
+      'Content-Type': 'application/json'
     };
   }
 
   async get<T>(endpoint: string, params?: Record<string, string | number>): Promise<Response> {
-    const url = new URL(`${BASE_URL}${endpoint}`);
+    // Browser environment'ta absolute URL oluştur
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    const fullUrl = `${baseUrl}${BASE_URL}${endpoint}`;
+    const url = new URL(fullUrl);
     
     if (params) {
       for (const [key, value] of Object.entries(params)) {
@@ -37,12 +39,22 @@ export class ApiClient {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new ApiError({
-        status: response.status,
-        message: `HTTP ${response.status}`,
-        details: errorText.slice(0, 200)
-      });
+      try {
+        const errorData = await response.json();
+        throw new ApiError({
+          status: response.status,
+          message: errorData.error || `HTTP ${response.status}`,
+          details: errorData.details
+        });
+      } catch (jsonError) {
+        // JSON parse edemediysek text olarak al
+        const errorText = await response.text();
+        throw new ApiError({
+          status: response.status,
+          message: `HTTP ${response.status}`,
+          details: errorText.slice(0, 200)
+        });
+      }
     }
 
     return response;
@@ -95,10 +107,11 @@ export class ApiClient {
     this.orgId = orgId;
     this.apiKey = apiKey;
     
-    const auth = btoa(`:${apiKey}`);
+    // Yeni sistem: x-api-key header'ını güncelle
     this.headers = {
-      ...this.headers,
-      'Authorization': `Basic ${auth}`
+      'x-api-key': apiKey,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
     };
   }
 }

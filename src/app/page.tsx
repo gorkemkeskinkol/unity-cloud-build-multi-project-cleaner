@@ -2,9 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { CredentialManager } from '@/modules/config/credential-manager';
-import { ScanOrchestrator } from '@/modules/scanning/scan-orchestrator';
 import { LogProvider, useLog } from '@/contexts/LogContext';
-import { AppConfig, ScanProgress } from '@/types';
+import { AppConfig } from '@/types';
 
 // Setup Wizard Component
 function SetupWizard({ onComplete }: { onComplete: (config: AppConfig) => void }) {
@@ -204,47 +203,52 @@ function LogPanel() {
 
 // Dashboard Component
 function Dashboard({ config }: { config: AppConfig }) {
-  const [scanProgress, setScanProgress] = useState<ScanProgress>({
-    currentProject: 0,
-    totalProjects: 0,
-    currentProjectName: '',
-    currentTarget: 0,
-    totalTargets: 0,
-    isScanning: false,
-    canCancel: false
-  });
+  const [isScanning, setIsScanning] = useState(false);
   const [scanResults, setScanResults] = useState<any>(null);
-  const [scanner] = useState(() => new ScanOrchestrator());
   const [limitProjects, setLimitProjects] = useState<number | undefined>(5); // Default 5 proje
   const { addLog } = useLog();
-
-  useEffect(() => {
-    // Setup callbacks
-    scanner.setLogCallback(addLog);
-    scanner.setProgressCallback(setScanProgress);
-  }, [scanner, addLog]);
 
   const startScan = async () => {
     try {
       setScanResults(null);
-      addLog('info', 'Scan başlatılıyor...', 'Dashboard');
+      setIsScanning(true);
+      addLog('info', 'Scan başlatılıyor (server-side)...', 'Dashboard');
       
-      const results = await scanner.startScan({
-        limitProjects: limitProjects,
-        limitTargets: config.limitTargets
+      const response = await fetch('/api/scan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          credentials: config, // Credentials'ı server'a gönder
+          limitProjects: limitProjects,
+          limitTargets: config.limitTargets,
+          cacheMaxAgeMs: 3600000 // 1 saat cache
+        })
       });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Scan API hatası');
+      }
+
+      const data = await response.json();
       
-      setScanResults(results);
-      addLog('success', `Scan tamamlandı! ${results.summary.totalBuilds} build bulundu.`, 'Dashboard');
+      // Server'dan gelen log'ları ekle
+      if (data.logs && Array.isArray(data.logs)) {
+        data.logs.forEach((log: any) => {
+          addLog(log.level, log.message, log.source);
+        });
+      }
+      
+      setScanResults(data);
+      addLog('success', `Scan tamamlandı! ${data.summary.totalBuilds} build bulundu (${data.summary.cachedProjects} cache, ${data.summary.freshProjects} yeni).`, 'Dashboard');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
       addLog('error', `Scan hatası: ${message}`, 'Dashboard');
+    } finally {
+      setIsScanning(false);
     }
-  };
-
-  const cancelScan = () => {
-    scanner.cancelScan();
-    addLog('warning', 'Scan iptal edildi', 'Dashboard');
   };
 
   const clearCredentials = () => {
@@ -314,7 +318,7 @@ function Dashboard({ config }: { config: AppConfig }) {
               value={limitProjects || ''}
               onChange={(e) => setLimitProjects(e.target.value ? parseInt(e.target.value) : undefined)}
               placeholder="Boş = tümü"
-              disabled={scanProgress.isScanning}
+              disabled={isScanning}
               style={{
                 width: '120px',
                 padding: '8px',
@@ -334,67 +338,36 @@ function Dashboard({ config }: { config: AppConfig }) {
         }}>
           <button
             onClick={startScan}
-            disabled={scanProgress.isScanning}
+            disabled={isScanning}
             style={{
               padding: '12px 24px',
-              backgroundColor: scanProgress.isScanning ? '#ccc' : '#28a745',
+              backgroundColor: isScanning ? '#ccc' : '#28a745',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: scanProgress.isScanning ? 'not-allowed' : 'pointer',
+              cursor: isScanning ? 'not-allowed' : 'pointer',
               fontSize: '16px'
             }}
           >
-            {scanProgress.isScanning ? 'Scanning...' : 'Start Project Scan'}
+            {isScanning ? 'Scanning (Server-Side)...' : 'Start Project Scan'}
           </button>
-
-          {scanProgress.canCancel && (
-            <button
-              onClick={cancelScan}
-              style={{
-                padding: '12px 24px',
-                backgroundColor: '#ffc107',
-                color: 'black',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '16px'
-              }}
-            >
-              Cancel Scan
-            </button>
-          )}
         </div>
       </div>
 
-      {/* Progress Indicator */}
-      {scanProgress.isScanning && (
+      {/* Scanning Indicator */}
+      {isScanning && (
         <div style={{
-          backgroundColor: '#e9ecef',
+          backgroundColor: '#fff3cd',
           padding: '15px',
           borderRadius: '4px',
-          marginBottom: '20px'
+          marginBottom: '20px',
+          border: '1px solid #ffc107'
         }}>
-          <h4>Scan Progress</h4>
-          <p>
-            <strong>Project:</strong> {scanProgress.currentProject}/{scanProgress.totalProjects} 
-            {scanProgress.currentProjectName && ` - ${scanProgress.currentProjectName}`}
+          <h4>⏳ Scan İşleniyor (Server-Side)</h4>
+          <p>Projeler server-side taranıyor ve cache'leniyor. Lütfen bekleyin...</p>
+          <p style={{ fontSize: '14px', color: '#666', marginTop: '10px' }}>
+            Log panelinde detaylı ilerleme görebilirsiniz.
           </p>
-          <div style={{
-            width: '100%',
-            backgroundColor: '#f8f9fa',
-            borderRadius: '4px',
-            overflow: 'hidden'
-          }}>
-            <div
-              style={{
-                width: `${(scanProgress.currentProject / scanProgress.totalProjects) * 100}%`,
-                height: '20px',
-                backgroundColor: '#007bff',
-                transition: 'width 0.3s ease'
-              }}
-            />
-          </div>
         </div>
       )}
 

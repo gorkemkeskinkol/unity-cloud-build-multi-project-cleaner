@@ -40,18 +40,39 @@
 ---
 
 ## 3. Database Management System (DMS) 
-**Sorumluluk**: SQLite veritabanı işlemleri ve veri modeli yönetimi
+**Sorumluluk**: SQLite veritabanı işlemleri, veri modeli yönetimi ve cache sistemi
 
 ### Ana İşlevler
 - Proje, build target ve build count verilerinin saklanması
 - Geçmiş scan sonuçlarının tutulması
+- Cache management (time-based TTL)
+- Bulk operations (çoklu proje cache temizleme)
 - Data migration ve schema versioning
-- Query optimization
+- Query optimization ve indexing
+
+### Cache Sistemi
+- **Time-based Caching**: lastScannedAt + TTL kontrolü ile
+- **Default TTL**: 1 saat (cacheMaxAgeMs ile yapılandırılabilir)
+- **Cache Operations**:
+  - `isProjectCached()`: Proje cache durumu kontrolü
+  - `clearProjectCache()`: Tek proje cache temizleme
+  - `bulkClearProjectsCache()`: Çoklu proje cache temizleme
+  - `getCachedProjects()`: Cache'lenmiş projeleri listeleme
+
+### Veri Modeli
+- **Organization**: Unity Cloud Build organizasyonu
+- **Project**: Unity projeleri (lastScannedAt ile cache tracking)
+- **BuildTarget**: Proje build hedefleri
+- **ScanResult**: Tarama sonuçları (metadata ve status)
+- **BuildCount**: Her target için build sayıları
+- **LogEntry**: İşlem log kayıtları
 
 ### Teknolojiler
-- Prisma ORM
-- SQLite3
-- Database seeding ve migrations
+- Prisma ORM (Type-safe database client)
+- SQLite3 (Local file-based database)
+- Singleton pattern (DatabaseService)
+- Cascade delete operations
+- Transaction support
 
 ---
 

@@ -31,36 +31,48 @@ CredentialManager.getCredentials()
 
 ---
 
-## 2. Project Scanning ve Veri Toplama
+## 2. Project Scanning ve Veri Toplama (Server-Side)
 
 ### Veri Akışı
 ```
-Kullanıcı "Scan Projects" butonuna tıklar
+Kullanıcı "Scan Projects" butonuna tıklar (Dashboard - client-side)
     ↓
-ScanOrchestrator.startScan() çağrılır
+fetch('/api/scan', { credentials, limitProjects, ... })
+    ↓
+POST /api/scan endpoint (server-side)
+    ├─ Request body'den credentials alınır
+    ├─ Credentials validation (orgId, apiKey kontrolü)
+    └─ [Validation başarısız ise] → 401 Unauthorized döner
+    ↓
+ScanOrchestrator.startScan(options) çağrılır
+    ├─ options.credentials kullanılır (localStorage DEĞİL!)
+    └─ Log callback set edilir (server-side log collection)
     ↓
 LogContext.addLog("Scan başladı")
     ↓
 UnityCloudBuildService.listProjects()
     ↓
-ProjectProcessor.process() (her proje için paralel)
+ProjectProcessor.process() (her proje için sıralı)
     ├─ UnityCloudBuildService.listBuildTargets()
     ├─ UnityCloudBuildService.countBuilds() (her target için)
     ├─ LogContext.addLog(progress) (her adımda)
     └─ DatabaseService.saveProject() (işlem tamamında)
     ↓
-ScanOrchestrator.getScanProgress() (UI güncellemesi için)
+Server response: { results, summary, logs }
     ↓
-NotificationService.showSuccess() veya showError()
+Client log'ları alır ve UI'a ekler
     ↓
-Dashboard verileri güncellenir (React Query cache invalidation)
+Dashboard verileri güncellenir
 ```
 
 ### Kritik Noktalar
-- Her API çağrısı öncesi ve sonrası log kaydı
+- **Credentials client'dan server'a HTTP request body ile gönderilir**
+- Server-side credentials localStorage'a erişemez (window object yok)
+- Her API çağrısı öncesi ve sonrası log kaydı server'da yapılır
 - Hata durumlarında partial results korunur
 - Progress tracking kullanıcı experience için kritik
-- Database yazma işlemi her proje tamamlandığında yapılır
+- Database yazma işlemi her proje tamamlandığında yapılır (server-side)
+- Log'lar toplanır ve response'da client'a gönderilir
 
 ---
 
@@ -178,3 +190,64 @@ NotificationService.showError(user-friendly message)
 - Authentication errors için immediate user feedback
 - Rate limiting için intelligent backoff
 - Partial results korunur ve kullanıcıya sunulur
+
+---
+
+## 7. Cache Management ve Project Scanning
+
+### Veri Akışı
+```
+ScanOrchestrator.startScan() başlatılır
+    ↓
+DatabaseService.getInstance()
+    ↓
+Organization database'e kaydedilir
+    ↓
+[Her proje için]
+    ├─ DatabaseService.isProjectCached(projectId, cacheMaxAgeMs)
+    │   ↓
+    ├─ [Cache HIT]
+    │   ├─ DatabaseService.getProject(projectId)
+    │   ├─ DatabaseService.getLatestScanResult(projectId)
+    │   ├─ Result'a isFromCache=true ile ekle
+    │   └─ LogContext.addLog("Cache'den çekildi", SUCCESS)
+    │
+    └─ [Cache MISS veya EXPIRED]
+        ├─ Unity API'den proje taranır
+        ├─ DatabaseService.saveProject() (lastScannedAt güncellenir)
+        ├─ DatabaseService.saveScanResult()
+        ├─ DatabaseService.saveBuildTarget() (her target için)
+        ├─ DatabaseService.saveBuildCount() (her target için)
+        ├─ Result'a isFromCache=false ile ekle
+        └─ LogContext.addLog("API'den tarandı", SUCCESS)
+```
+
+### Cache Temizleme Workflow
+```
+Kullanıcı "Remove from Cache" seçer
+    ↓
+[Tek proje mi, çoklu proje mi?]
+    ├─ Tek Proje
+    │   ├─ DELETE /api/cache/[projectId]
+    │   └─ DatabaseService.clearProjectCache(projectId)
+    │
+    └─ Çoklu Proje (Bulk)
+        ├─ POST /api/cache/bulk
+        └─ DatabaseService.bulkClearProjectsCache(projectIds[])
+    ↓
+ScanResult ve BuildCount kayıtları silinir
+    ↓
+Project.lastScannedAt = null olarak güncellenir
+    ↓
+UI güncellenir (cache status değişir)
+    ↓
+NotificationService.showSuccess("Cache temizlendi")
+```
+
+### Kritik Noktalar
+- Cache TTL (Time To Live): Default 1 saat (cacheMaxAgeMs parametresi ile ayarlanabilir)
+- Cache kontrolü her scan'de proje bazında yapılır
+- Cache temizleme işlemi cascade delete ile ilgili tüm verileri siler
+- Cache'den gelen projeler status'ünde görsel olarak işaretlenir
+- Bulk cache clearing birden fazla projeyi tek transactionda temizler
+- Cache miss durumunda otomatik API fallback

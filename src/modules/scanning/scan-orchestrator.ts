@@ -1,6 +1,7 @@
 import { UnityCloudBuildService } from '@/modules/api/unity-cloud-build';
 import { CredentialManager } from '@/modules/config/credential-manager';
-import { ScanOptions, ScanProgress, ScanResult, UnityProject } from '@/types';
+import { DatabaseService } from '@/modules/database/database-service';
+import { ScanOptions, ScanProgress, ProjectScanResult, ScanSummary } from '@/types';
 
 export class ScanOrchestrator {
   private isScanning = false;
@@ -37,32 +38,18 @@ export class ScanOrchestrator {
   }
 
   /**
-   * Scanning başlat
+   * Scanning başlat (Cache-aware)
    */
   async startScan(options: ScanOptions = {}): Promise<{
-    results: Array<{
-      projectId: string;
-      projectName: string;
-      totalBuilds: number;
-      targetCount: number;
-      scannedTargets: number;
-      status: 'completed' | 'failed' | 'partial';
-      errors: string[];
-    }>;
-    summary: {
-      totalProjects: number;
-      completedProjects: number;
-      totalBuilds: number;
-      totalTargets: number;
-      totalErrors: number;
-    };
+    results: ProjectScanResult[];
+    summary: ScanSummary;
   }> {
     if (this.isScanning) {
       throw new Error('Zaten bir scan işlemi devam ediyor');
     }
 
-    // Credentials kontrolü
-    const credentials = CredentialManager.getCredentials();
+    // Credentials kontrolü - önce options'dan, sonra localStorage'dan
+    const credentials = options.credentials || CredentialManager.getCredentials();
     if (!credentials) {
       throw new Error('Unity Cloud Build credentials bulunamadı');
     }
@@ -97,18 +84,18 @@ export class ScanOrchestrator {
         canCancel: true
       });
 
-      const results: Array<{
-        projectId: string;
-        projectName: string;
-        totalBuilds: number;
-        targetCount: number;
-        scannedTargets: number;
-        status: 'completed' | 'failed' | 'partial';
-        errors: string[];
-      }> = [];
+      const db = DatabaseService.getInstance();
+      const cacheMaxAgeMs = options.cacheMaxAgeMs || 3600000; // Default 1 saat
+      
+      // Organization'ı database'e kaydet
+      await db.upsertOrganization(credentials.orgId);
+
+      const results: ProjectScanResult[] = [];
       let totalBuilds = 0;
       let totalTargets = 0;
       let totalErrors = 0;
+      let cachedProjects = 0;
+      let freshProjects = 0;
 
       // Her projeyi sırayla işle
       for (let i = 0; i < projectsToScan.length; i++) {
@@ -131,10 +118,107 @@ export class ScanOrchestrator {
         });
 
         try {
+          // Cache kontrolü yap
+          const isCached = await db.isProjectCached(projectId, cacheMaxAgeMs);
+          
+          if (isCached) {
+            // Cache'den veri çek
+            this.log('info', `${projectName}: Cache'den çekiliyor...`, 'ScanOrchestrator');
+            
+            const cachedProject = await db.getProject(projectId);
+            const latestScanResult = await db.getLatestScanResult(projectId);
+            
+            if (latestScanResult && cachedProject) {
+              results.push({
+                projectId,
+                projectName,
+                totalBuilds: latestScanResult.totalBuilds,
+                targetCount: latestScanResult.totalTargets,
+                scannedTargets: latestScanResult.scannedTargets,
+                status: latestScanResult.status,
+                errors: latestScanResult.errorMessage ? [latestScanResult.errorMessage] : [],
+                isFromCache: true,
+                cachedAt: cachedProject.lastScannedAt
+              });
+
+              totalBuilds += latestScanResult.totalBuilds;
+              totalTargets += latestScanResult.totalTargets;
+              cachedProjects++;
+
+              this.log('success', `${projectName}: ${latestScanResult.totalBuilds} builds (Cache'den)`, 'ScanOrchestrator');
+              continue;
+            }
+          }
+
+          // Cache'de yok veya expired - API'den çek
+          this.log('info', `${projectName}: API'den taranıyor...`, 'ScanOrchestrator');
+          const startTime = Date.now();
+          
           const result = await this.unityService.getTotalBuildsForProject(
             projectId,
             options.limitTargets || credentials.limitTargets
           );
+
+          const scanStatus: 'completed' | 'failed' | 'partial' = 
+            result.errors.length === 0 ? 'completed' : 
+            result.scannedTargets > 0 ? 'partial' : 'failed';
+
+          const completedAt = new Date();
+          const durationMs = Date.now() - startTime;
+
+          // Projeyi database'e kaydet
+          await db.saveProject({
+            id: projectId,
+            name: projectName,
+            organizationId: credentials.orgId,
+            description: project.description,
+            lastScannedAt: completedAt
+          });
+
+          // Scan result'ı kaydet
+          const scanResultId = await db.saveScanResult({
+            projectId,
+            status: scanStatus,
+            totalBuilds: result.totalBuilds,
+            totalTargets: result.targetCount,
+            scannedTargets: result.scannedTargets,
+            errorMessage: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+            startedAt: new Date(startTime),
+            completedAt,
+            durationMs
+          });
+
+          // Build targets bilgilerini çek ve kaydet
+          try {
+            const targets = await this.unityService.listBuildTargets(projectId);
+            const limitTargets = options.limitTargets || credentials.limitTargets;
+            const targetsToSave = limitTargets ? targets.slice(0, limitTargets) : targets;
+            
+            for (const target of targetsToSave) {
+              const targetId = target.buildtargetid || target.buildTargetId || '';
+              if (targetId) {
+                await db.saveBuildTarget({
+                  id: targetId,
+                  name: target.name,
+                  platform: target.platform,
+                  projectId,
+                  enabled: target.enabled ?? true
+                });
+
+                // Build count'u API'den çek ve kaydet
+                try {
+                  const buildCount = await this.unityService.countBuilds(projectId, targetId);
+                  await db.saveBuildCount(targetId, buildCount, scanResultId);
+                } catch (error) {
+                  // Build count hatası kritik değil, devam et
+                  this.log('warning', `${projectName} - ${target.name}: Build count alınamadı`, 'ScanOrchestrator');
+                }
+              }
+            }
+          } catch (error) {
+            // Build target bilgilerini kaydetme hatası kritik değil
+            this.log('warning', `${projectName}: Build target bilgileri kaydedilemedi`, 'ScanOrchestrator');
+          }
 
           results.push({
             projectId,
@@ -142,14 +226,15 @@ export class ScanOrchestrator {
             totalBuilds: result.totalBuilds,
             targetCount: result.targetCount,
             scannedTargets: result.scannedTargets,
-            status: result.errors.length === 0 ? 'completed' as const : 
-                   result.scannedTargets > 0 ? 'partial' as const : 'failed' as const,
-            errors: result.errors
+            status: scanStatus,
+            errors: result.errors,
+            isFromCache: false
           });
 
           totalBuilds += result.totalBuilds;
           totalTargets += result.targetCount;
           totalErrors += result.errors.length;
+          freshProjects++;
 
           this.log('success', `${projectName}: ${result.totalBuilds} builds (${result.scannedTargets}/${result.targetCount} targets)`, 'ScanOrchestrator');
 
@@ -164,25 +249,29 @@ export class ScanOrchestrator {
             targetCount: 0,
             scannedTargets: 0,
             status: 'failed',
-            errors: [errorMessage]
+            errors: [errorMessage],
+            isFromCache: false
           });
 
           totalErrors++;
+          freshProjects++;
         }
 
         // Kısa bir bekleme (rate limiting için)
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      const summary = {
+      const summary: ScanSummary = {
         totalProjects: projectsToScan.length,
         completedProjects: results.filter(r => r.status === 'completed').length,
         totalBuilds,
         totalTargets,
-        totalErrors
+        totalErrors,
+        cachedProjects,
+        freshProjects
       };
 
-      this.log('success', `Scan tamamlandı! ${summary.completedProjects}/${summary.totalProjects} proje, toplam ${totalBuilds} build`, 'ScanOrchestrator');
+      this.log('success', `Scan tamamlandı! ${summary.completedProjects}/${summary.totalProjects} proje, ${cachedProjects} cache'den, ${freshProjects} yeni tarandı. Toplam ${totalBuilds} build`, 'ScanOrchestrator');
 
       // Progress'i sıfırla
       this.updateProgress({

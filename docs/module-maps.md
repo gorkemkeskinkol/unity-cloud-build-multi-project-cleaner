@@ -1,5 +1,42 @@
 # Modül Haritaları
 
+## Database Modülü (`src/modules/database/`)
+
+### database-service.ts
+**Sorumluluk**: SQLite database işlemleri için singleton service layer
+
+**Ana Fonksiyonlar:**
+- `getInstance()`: DatabaseService singleton instance
+- `upsertOrganization()`: Organization kaydet/güncelle
+- `saveProject()`: Project bilgilerini kaydet
+- `getProject()`: Project bilgilerini çek
+- `getCachedProjects()`: Cache'lenmiş projeleri listele
+- `isProjectCached()`: Projenin cache durumunu kontrol et
+- `saveBuildTarget()`: Build target bilgilerini kaydet
+- `getBuildTargetsForProject()`: Proje build target'larını çek
+- `saveScanResult()`: Scan sonucunu kaydet
+- `getLatestScanResult()`: En son scan sonucunu çek
+- `saveBuildCount()`: Build count kaydet
+- `clearProjectCache()`: Tek proje cache'ini temizle
+- `bulkClearProjectsCache()`: Çoklu proje cache temizleme
+- `clearAllCache()`: Organizasyondaki tüm cache'i temizle
+- `saveLog()`: Log entry kaydet
+- `getLogs()`: Log listesi çek
+- `getProjectStats()`: Proje istatistikleri
+
+**İlişkiler:**
+- Prisma Client kullanır
+- ScanOrchestrator tarafından kullanılır
+- Cache API endpoints tarafından kullanılır
+
+**Cache Logic:**
+- Time-based TTL kontrolü (lastScannedAt field'ı ile)
+- Default cache süresi: 1 saat (3600000 ms)
+- Cascade delete operasyonları
+- Transaction support
+
+---
+
 ## Configuration Management System (CMS) Modülleri
 
 ### 1. CredentialManager
@@ -30,14 +67,22 @@ interface CredentialManager {
 
 ### 1. ApiClient ✅
 **Dosya**: `src/modules/api/api-client.ts`
-**Sorumluluk**: Temel HTTP operations
+**Sorumluluk**: Temel HTTP operations (Dual-mode: Client & Server)
 ```typescript
 interface ApiClient {
   get<T>(endpoint: string, params?: object): Promise<T>
   getContentRangeTotal(response: Response): number
 }
 ```
-**Durum**: ✅ Tamamlandı - CORS bypass için server-side kullanıma hazır
+**Özellikler**:
+- **Client-side**: Next.js API routes üzerinden proxy (`/api/unity/...`)
+- **Server-side**: Direkt Unity API'ye bağlanır (`https://build-api.cloud.unity3d.com/...`)
+- Otomatik environment detection (`typeof window === 'undefined'`)
+- Client: `x-api-key` header | Server: `Basic` auth
+- 30 saniye timeout
+- Automatic error handling
+
+**Durum**: ✅ Tamamlandı - Hem client hem server-side çalışır, CORS sorunu yok
 
 ### 2. UnityCloudBuildService ✅
 **Dosya**: `src/modules/api/unity-cloud-build.ts`

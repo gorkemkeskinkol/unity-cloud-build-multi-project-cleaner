@@ -73,9 +73,11 @@ export interface LogEntry {
 
 // Scanning Types
 export interface ScanOptions {
+  credentials?: AppConfig; // Server-side scan için credentials
   limitProjects?: number;
   limitTargets?: number;
   parallelRequests?: number;
+  cacheMaxAgeMs?: number; // Cache geçerlilik süresi (milisaniye)
 }
 
 export interface ScanProgress {
@@ -86,6 +88,28 @@ export interface ScanProgress {
   totalTargets: number;
   isScanning: boolean;
   canCancel: boolean;
+}
+
+export interface ProjectScanResult {
+  projectId: string;
+  projectName: string;
+  totalBuilds: number;
+  targetCount: number;
+  scannedTargets: number;
+  status: 'completed' | 'failed' | 'partial';
+  errors: string[];
+  isFromCache: boolean; // Cache'den mi geldi?
+  cachedAt?: Date; // Cache tarihi
+}
+
+export interface ScanSummary {
+  totalProjects: number;
+  completedProjects: number;
+  totalBuilds: number;
+  totalTargets: number;
+  totalErrors: number;
+  cachedProjects: number; // Cache'den gelen proje sayısı
+  freshProjects: number; // API'den yeni taranan proje sayısı
 }
 
 // API Response Types

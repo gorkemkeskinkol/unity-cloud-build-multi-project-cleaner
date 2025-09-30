@@ -1,30 +1,50 @@
 import { ContentRangeInfo } from '@/types';
 
-// Artık kendi Next.js API routes'larımızı kullanıyoruz
-const BASE_URL = '/api/unity';
+// Client-side için Next.js API routes
+const NEXTJS_API_BASE = '/api/unity';
+// Server-side için direkt Unity API
+const UNITY_API_BASE = 'https://build-api.cloud.unity3d.com/api/v1';
 
 export class ApiClient {
   private orgId: string;
   private apiKey: string;
   private headers: HeadersInit;
+  private isServerSide: boolean;
 
   constructor(orgId: string, apiKey: string) {
     this.orgId = orgId;
     this.apiKey = apiKey;
+    this.isServerSide = typeof window === 'undefined';
     
-    // API key'i custom header olarak gönderiyoruz
-    this.headers = {
-      'x-api-key': apiKey,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
-    };
+    // Server-side: Basic auth for Unity API
+    // Client-side: x-api-key header for Next.js routes
+    if (this.isServerSide) {
+      const auth = Buffer.from(`:${apiKey}`).toString('base64');
+      this.headers = {
+        'Authorization': `Basic ${auth}`,
+        'Accept': 'application/json',
+        'User-Agent': 'unity-cloud-build-multi-project-cleaner/1.0'
+      };
+    } else {
+      this.headers = {
+        'x-api-key': apiKey,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      };
+    }
   }
 
   async get<T>(endpoint: string, params?: Record<string, string | number>): Promise<Response> {
-    // Browser environment'ta absolute URL oluştur
-    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-    const fullUrl = `${baseUrl}${BASE_URL}${endpoint}`;
-    const url = new URL(fullUrl);
+    let url: URL;
+    
+    if (this.isServerSide) {
+      // Server-side: Direkt Unity API'ye git
+      url = new URL(`${UNITY_API_BASE}${endpoint}`);
+    } else {
+      // Client-side: Next.js API routes kullan
+      const fullUrl = `${window.location.origin}${NEXTJS_API_BASE}${endpoint}`;
+      url = new URL(fullUrl);
+    }
     
     if (params) {
       for (const [key, value] of Object.entries(params)) {
@@ -107,12 +127,21 @@ export class ApiClient {
     this.orgId = orgId;
     this.apiKey = apiKey;
     
-    // Yeni sistem: x-api-key header'ını güncelle
-    this.headers = {
-      'x-api-key': apiKey,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
-    };
+    // Header'ları environment'a göre güncelle
+    if (this.isServerSide) {
+      const auth = Buffer.from(`:${apiKey}`).toString('base64');
+      this.headers = {
+        'Authorization': `Basic ${auth}`,
+        'Accept': 'application/json',
+        'User-Agent': 'unity-cloud-build-multi-project-cleaner/1.0'
+      };
+    } else {
+      this.headers = {
+        'x-api-key': apiKey,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      };
+    }
   }
 }
 

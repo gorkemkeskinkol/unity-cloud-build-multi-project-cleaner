@@ -35,7 +35,7 @@ function logReducer(state: LogState, action: LogAction): LogState {
       };
 
       return {
-        logs: [...state.logs, newLog],
+        logs: [newLog, ...state.logs],
         nextId: state.nextId + 1
       };
 

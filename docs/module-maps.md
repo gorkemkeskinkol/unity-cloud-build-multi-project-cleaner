@@ -28,7 +28,7 @@ interface CredentialManager {
 
 ## Unity Cloud Build API Integration (UCBAI) Modülleri
 
-### 1. ApiClient
+### 1. ApiClient ✅
 **Dosya**: `src/modules/api/api-client.ts`
 **Sorumluluk**: Temel HTTP operations
 ```typescript
@@ -37,8 +37,9 @@ interface ApiClient {
   getContentRangeTotal(response: Response): number
 }
 ```
+**Durum**: ✅ Tamamlandı - CORS bypass için server-side kullanıma hazır
 
-### 2. UnityCloudBuildService
+### 2. UnityCloudBuildService ✅
 **Dosya**: `src/modules/api/unity-cloud-build.ts`
 **Sorumluluk**: Unity specific API operations
 **Bağımlılık**: ApiClient
@@ -48,13 +49,19 @@ interface UnityCloudBuildService {
   listBuildTargets(orgId: string, projectId: string): Promise<BuildTarget[]>
   countBuilds(orgId: string, projectId: string, buildTargetId: string): Promise<number>
   sanityCheckOrg(orgId: string): Promise<number>
+  getTotalBuildsForProject(projectId: string, limitTargets?: number): Promise<ScanResult>
 }
 ```
+**Durum**: ✅ Tamamlandı - Tam proje scanning desteği
 
-### 3. ApiHooks
-**Dosya**: `src/hooks/api-hooks.ts`
-**Sorumluluk**: React Query integration
-**Bağımlılık**: UnityCloudBuildService
+### 3. Next.js API Routes ✅
+**CORS Çözümü için Server-Side Proxy**
+- `src/app/api/unity/orgs/[orgId]/builds/route.ts` - Organization builds
+- `src/app/api/unity/orgs/[orgId]/projects/route.ts` - Project listing
+- `src/app/api/unity/orgs/[orgId]/projects/[projectId]/buildtargets/route.ts` - Build targets
+- `src/app/api/unity/orgs/[orgId]/projects/[projectId]/buildtargets/[targetId]/builds/route.ts` - Specific builds
+
+**Durum**: ✅ Tamamlandı - CORS sorunu çözüldü, tüm Unity API endpoint'leri proxy edildi
 
 ---
 

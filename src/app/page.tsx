@@ -230,7 +230,7 @@ function Dashboard({ config }: { config: AppConfig }) {
       addLog('info', 'Scan başlatılıyor...', 'Dashboard');
       
       const results = await scanner.startScan({
-        limitProjects: 5, // Test için sadece 5 proje
+        limitProjects: limitProjects,
         limitTargets: config.limitTargets
       });
       

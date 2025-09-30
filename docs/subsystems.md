@@ -1,0 +1,96 @@
+# Alt Sistemler
+
+## 1. Configuration Management System (CMS)
+**Sorumluluk**: Unity Cloud Build API credentials ve uygulama ayarlarının yönetimi
+
+### Ana İşlevler
+- API key ve organization ID validasyonu
+- Local storage ile güvenli credential saklama
+- Ayar değişikliklerinin real-time kontrolü
+- İlk kurulum wizard'ı
+
+### Teknolojiler
+- Browser Local Storage API
+- Mantine Form validation
+- Base64 encoding (Python scripti uyumluluğu için)
+
+---
+
+## 2. Unity Cloud Build API Integration (UCBAI)
+**Sorumluluk**: Unity Cloud Build REST API ile iletişim
+
+### Ana İşlevler
+- Organizations, projects, build targets listeleme
+- Build count sayma işlemleri
+- HTTP error handling ve retry logic
+- Rate limiting ve timeout yönetimi
+
+### Teknolojiler
+- Fetch API / Axios
+- TanStack React Query (caching & state)
+- Custom hooks için abstraction layer
+
+---
+
+## 3. Database Management System (DMS) 
+**Sorumluluk**: SQLite veritabanı işlemleri ve veri modeli yönetimi
+
+### Ana İşlevler
+- Proje, build target ve build count verilerinin saklanması
+- Geçmiş scan sonuçlarının tutulması
+- Data migration ve schema versioning
+- Query optimization
+
+### Teknolojiler
+- Prisma ORM
+- SQLite3
+- Database seeding ve migrations
+
+---
+
+## 4. Real-time Logging System (RLS)
+**Sorumluluk**: Kullanıcıya anlık işlem feedback'i sağlama
+
+### Ana İşlevler
+- API çağrıları sırasında progress tracking
+- Error ve success mesajlarının görüntülenmesi
+- Log history ve filtering
+- Mantine notifications entegrasyonu
+
+### Teknolojiler
+- React Context API / Zustand
+- Mantine Notifications
+- WebSocket (gelecek versiyonlar için hazırlık)
+
+---
+
+## 5. User Interface System (UIS)
+**Sorumluluk**: Kullanıcı arayüzü bileşenleri ve etkileşimleri
+
+### Ana İşlevler
+- Dashboard layout ve navigation
+- Project ve build data visualizasyonu
+- Responsive design ve accessibility
+- Form handling ve validation
+
+### Teknolojiler
+- Mantine Core components
+- Mantine Hooks
+- Tabler Icons
+- CSS Modules / Mantine styles
+
+---
+
+## 6. Data Collection & Processing System (DCPS)
+**Sorumluluk**: Python scriptinin Node.js karşılığı işlem mantığı
+
+### Ana İşlevler
+- Multi-project batch processing
+- Parallel API request management
+- Progress calculation ve reporting
+- Error recovery ve partial results
+
+### Teknolojiler
+- Promise.all / Promise.allSettled
+- Custom async iterators
+- Background job processing

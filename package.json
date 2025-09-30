@@ -1,0 +1,38 @@
+{
+  "name": "unity-cloud-build-multi-project-cleaner",
+  "version": "1.0.0",
+  "description": "A dashboard/web UI tool for managing multiple Unity projects at once, letting you scan, monitor, and clean build artifacts across projects.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@mantine/core": "7.17.8",
+    "@mantine/hooks": "7.17.8",
+    "@mantine/notifications": "7.17.8",
+    "@prisma/client": "^5.22.0",
+    "@tabler/icons-react": "^3.34.1",
+    "@tanstack/react-query": "^5.62.0",
+    "next": "^15.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^8",
+    "eslint-config-next": "15.1.0",
+    "prisma": "^5.22.0",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

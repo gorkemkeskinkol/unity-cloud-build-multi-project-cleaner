@@ -31,7 +31,7 @@ CredentialManager.getCredentials()
 
 ---
 
-## 2. Project Scanning ve Veri Toplama (Server-Side)
+## 2. Project Scanning ve Veri Toplama (Server-Side SSE)
 
 ### Veri Akışı
 ```
@@ -44,35 +44,86 @@ POST /api/scan endpoint (server-side)
     ├─ Credentials validation (orgId, apiKey kontrolü)
     └─ [Validation başarısız ise] → 401 Unauthorized döner
     ↓
+SSE Stream başlatılır (ReadableStream)
+    ↓
 ScanOrchestrator.startScan(options) çağrılır
     ├─ options.credentials kullanılır (localStorage DEĞİL!)
-    └─ Log callback set edilir (server-side log collection)
+    ├─ Log callback set edilir → SSE event olarak stream edilir
+    └─ Progress callback set edilir → SSE event olarak stream edilir
     ↓
-LogContext.addLog("Scan başladı")
+[GERÇEK ZAMANLI STREAMING BAŞLAR]
     ↓
 UnityCloudBuildService.listProjects()
+    ├─ Log Event → SSE stream → Client LogContext.addLog()
+    └─ Client UI ANINDA güncellenir
     ↓
 ProjectProcessor.process() (her proje için sıralı)
+    ├─ Her adımda:
+    │   ├─ Log Event → SSE stream → Client
+    │   ├─ Progress Event → SSE stream → Client  
+    │   └─ Client UI GERÇEK ZAMANLI güncellenir
     ├─ UnityCloudBuildService.listBuildTargets()
     ├─ UnityCloudBuildService.countBuilds() (her target için)
-    ├─ LogContext.addLog(progress) (her adımda)
     └─ DatabaseService.saveProject() (işlem tamamında)
     ↓
-Server response: { results, summary, logs }
+Scan tamamlanır
+    ├─ Complete Event → SSE stream → Client
+    │   ├─ { results, summary } içerir
+    │   └─ Client final state'i alır
+    └─ SSE stream kapatılır (controller.close())
     ↓
-Client log'ları alır ve UI'a ekler
+Client connection kapanır
     ↓
-Dashboard verileri güncellenir
+Dashboard final verileri gösterir
 ```
 
+### SSE Event Tipleri
+1. **log** - Her log mesajı için
+   ```json
+   {
+     "level": "info|warning|error|success",
+     "message": "Log mesajı",
+     "source": "Kaynak modül",
+     "timestamp": "ISO timestamp"
+   }
+   ```
+
+2. **progress** - İlerleme güncellemeleri için
+   ```json
+   {
+     "currentProject": 3,
+     "totalProjects": 5,
+     "currentProjectName": "Proje Adı",
+     "isScanning": true
+   }
+   ```
+
+3. **complete** - Scan tamamlandığında
+   ```json
+   {
+     "results": [...],
+     "summary": {...}
+   }
+   ```
+
+4. **error** - Hata oluştuğunda
+   ```json
+   {
+     "message": "Hata mesajı"
+   }
+   ```
+
 ### Kritik Noktalar
+- **Real-time streaming**: Log'lar oluşturulduğu anda client'a ulaşır
+- **SSE (Server-Sent Events)** standardı kullanılır (WebSocket değil)
 - **Credentials client'dan server'a HTTP request body ile gönderilir**
 - Server-side credentials localStorage'a erişemez (window object yok)
-- Her API çağrısı öncesi ve sonrası log kaydı server'da yapılır
+- Her log server'da oluşturulur ve anında SSE event olarak stream edilir
 - Hata durumlarında partial results korunur
-- Progress tracking kullanıcı experience için kritik
+- Progress tracking gerçek zamanlı olarak client'a iletilir
 - Database yazma işlemi her proje tamamlandığında yapılır (server-side)
-- Log'lar toplanır ve response'da client'a gönderilir
+- Stream tamamlandığında connection otomatik kapanır
+- Client-side ReadableStream API ile event'ler parse edilir
 
 ---
 

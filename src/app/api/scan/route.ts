@@ -1,10 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { ScanOrchestrator } from '@/modules/scanning/scan-orchestrator';
-import { CredentialManager } from '@/modules/config/credential-manager';
 
 /**
  * POST /api/scan
- * Server-side scan endpoint - Prisma client server'da çalışır
+ * Server-Sent Events (SSE) ile real-time log streaming
  */
 export async function POST(request: NextRequest) {
   try {
@@ -18,56 +17,90 @@ export async function POST(request: NextRequest) {
 
     // Credentials kontrolü
     if (!credentials || !credentials.orgId || !credentials.apiKey) {
-      return NextResponse.json(
-        { error: 'Unity Cloud Build credentials eksik veya geçersiz' },
-        { status: 401 }
+      return new Response(
+        JSON.stringify({ error: 'Unity Cloud Build credentials eksik veya geçersiz' }),
+        { 
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
+        }
       );
     }
 
-    // Log collector için array
-    const logs: Array<{
-      level: 'info' | 'warning' | 'error' | 'success';
-      message: string;
-      source?: string;
-      timestamp: string;
-    }> = [];
+    // SSE Stream oluştur
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        // SSE event gönderme helper fonksiyonu
+        const sendEvent = (eventType: string, data: any) => {
+          const message = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+          controller.enqueue(encoder.encode(message));
+        };
 
-    // ScanOrchestrator oluştur
-    const orchestrator = new ScanOrchestrator();
+        try {
+          // ScanOrchestrator oluştur
+          const orchestrator = new ScanOrchestrator();
 
-    // Log callback
-    orchestrator.setLogCallback((level, message, source) => {
-      logs.push({
-        level,
-        message,
-        source,
-        timestamp: new Date().toISOString()
-      });
+          // Log callback - her log'u stream'e gönder
+          orchestrator.setLogCallback((level, message, source) => {
+            sendEvent('log', {
+              level,
+              message,
+              source,
+              timestamp: new Date().toISOString()
+            });
+          });
+
+          // Progress callback - ilerlemeyi stream'e gönder
+          orchestrator.setProgressCallback((progress) => {
+            sendEvent('progress', progress);
+          });
+
+          // Scan başlat
+          const result = await orchestrator.startScan({
+            credentials,
+            limitProjects,
+            limitTargets,
+            cacheMaxAgeMs
+          });
+
+          // Tamamlama event'i gönder
+          sendEvent('complete', {
+            results: result.results,
+            summary: result.summary
+          });
+
+        } catch (error) {
+          // Error event'i gönder
+          sendEvent('error', {
+            message: error instanceof Error ? error.message : String(error)
+          });
+        } finally {
+          // Stream'i kapat
+          controller.close();
+        }
+      }
     });
 
-    // Scan başlat - credentials'ı geç
-    const result = await orchestrator.startScan({
-      credentials,
-      limitProjects,
-      limitTargets,
-      cacheMaxAgeMs
-    });
-
-    return NextResponse.json({
-      success: true,
-      results: result.results,
-      summary: result.summary,
-      logs
+    // SSE response dön
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     });
 
   } catch (error) {
     console.error('Scan API Error:', error);
-    return NextResponse.json(
-      {
+    return new Response(
+      JSON.stringify({
         error: 'Scan işlemi başarısız',
         details: error instanceof Error ? error.message : String(error)
-      },
-      { status: 500 }
+      }),
+      { 
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
     );
   }
 }

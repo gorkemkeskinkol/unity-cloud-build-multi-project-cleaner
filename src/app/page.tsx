@@ -212,18 +212,19 @@ function Dashboard({ config }: { config: AppConfig }) {
     try {
       setScanResults(null);
       setIsScanning(true);
-      addLog('info', 'Scan başlatılıyor (server-side)...', 'Dashboard');
+      addLog('info', 'Scan başlatılıyor (server-side SSE)...', 'Dashboard');
       
+      // SSE için fetch isteği yap
       const response = await fetch('/api/scan', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          credentials: config, // Credentials'ı server'a gönder
+          credentials: config,
           limitProjects: limitProjects,
           limitTargets: config.limitTargets,
-          cacheMaxAgeMs: 3600000 // 1 saat cache
+          cacheMaxAgeMs: 3600000
         })
       });
 
@@ -232,17 +233,62 @@ function Dashboard({ config }: { config: AppConfig }) {
         throw new Error(errorData.error || 'Scan API hatası');
       }
 
-      const data = await response.json();
-      
-      // Server'dan gelen log'ları ekle
-      if (data.logs && Array.isArray(data.logs)) {
-        data.logs.forEach((log: any) => {
-          addLog(log.level, log.message, log.source);
-        });
+      if (!response.body) {
+        throw new Error('Response body yok');
       }
-      
-      setScanResults(data);
-      addLog('success', `Scan tamamlandı! ${data.summary.totalBuilds} build bulundu (${data.summary.cachedProjects} cache, ${data.summary.freshProjects} yeni).`, 'Dashboard');
+
+      // SSE stream'ini oku
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          break;
+        }
+
+        // Buffer'a yeni veriyi ekle
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Satırları ayır
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Son satırı buffer'da tut (eksik olabilir)
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            // Event type'ı oku
+            const eventType = line.substring(6).trim();
+            continue;
+          }
+          
+          if (line.startsWith('data:')) {
+            try {
+              const data = JSON.parse(line.substring(5).trim());
+              
+              // Event'e göre işle
+              if (line.includes('"level"')) {
+                // Log event'i
+                addLog(data.level, data.message, data.source);
+              } else if (line.includes('"summary"')) {
+                // Complete event'i
+                setScanResults({
+                  results: data.results,
+                  summary: data.summary
+                });
+                addLog('success', `Scan tamamlandı! ${data.summary.totalBuilds} build bulundu (${data.summary.cachedProjects} cache, ${data.summary.freshProjects} yeni).`, 'Dashboard');
+              } else if (line.includes('"message"') && !line.includes('"level"')) {
+                // Error event'i
+                addLog('error', `Scan hatası: ${data.message}`, 'Dashboard');
+              }
+            } catch (e) {
+              console.error('SSE parse error:', e, line);
+            }
+          }
+        }
+      }
+
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
       addLog('error', `Scan hatası: ${message}`, 'Dashboard');

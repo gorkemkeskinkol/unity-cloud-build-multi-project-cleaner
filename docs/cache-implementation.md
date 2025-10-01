@@ -246,7 +246,7 @@ const response = await fetch('/api/cache/bulk', {
 
 3. ✅ **Cache'deki Projelerin Dashboard'da Listelenmesi**
    - Sayfa yüklendiğinde cache'deki projeler otomatik listelenir
-   - Proje adı, son tarama zamanı ve cache durumu gösterilir
+   - Proje adı, platform bilgisi, build sayısı, son tarama zamanı ve cache durumu gösterilir
    - Scan sonrası otomatik cache reload
    - "CACHED" badge ile görsel gösterim
 
@@ -254,6 +254,39 @@ const response = await fetch('/api/cache/bulk', {
    - Default değer `undefined` (boş) olarak ayarlandı
    - Kullanıcı isterse limit girebilir
    - Boş bırakılırsa tüm projeler taranır
+
+5. ✅ **Multi-Select Checkbox Sistemi**
+   - Her proje satırında checkbox
+   - Header'da "Select All" checkbox (indeterminate state destekli)
+   - Checkbox state yönetimi Set<string> ile
+   - Seçili proje sayısı dinamik gösterim
+
+6. ✅ **Gear Icon ve Dropdown Menu**
+   - Her proje satırında ⚙️ gear ikonu
+   - Tıklandığında açılan dropdown menu
+   - "Clear Cache" action'ı
+   - Dropdown dışına tıklandığında otomatik kapanma
+   - Hover effect ile kullanıcı dostu arayüz
+
+7. ✅ **Bulk Actions Toolbar**
+   - Proje seçildiğinde "Clear Selected (N)" butonu görünür
+   - Bulk cache temizleme fonksiyonu
+   - API: `POST /api/cache/bulk` endpoint'i kullanımı
+   - İşlem sonrası otomatik cache yenileme
+
+8. ✅ **Cache Temizleme İşlemleri**
+   - Tek proje cache temizleme (gear menu'den)
+   - Çoklu proje cache temizleme (bulk action)
+   - Real-time log entegrasyonu (başarı/hata mesajları)
+   - Loading state yönetimi (isClearingCache)
+   - İşlem sonrası proje listesi güncelleme
+
+9. ✅ **Shift+Click Range Selection**
+   - Normal tıklama: Tek proje seçimi/seçim kaldırma
+   - Shift+Click: Son seçimden yeni seçime kadar range toggle
+   - Mantık: İlk tıklama index'i saklanır, Shift+Click ile aradaki projeler toggle edilir
+   - Örnek: Proje 3 seçili → Shift+Proje 7 = Proje 4,5,6,7 toggle
+   - lastClickedIndex state ile takip
 
 ### UI Layout Detayları
 
@@ -298,9 +331,9 @@ Tablo kolonları:
    - ✅ Two-column layout (2/3 dashboard, 1/3 logs)
    - ✅ Cached projects list on page load
    - ✅ Project limit default value (empty)
-   - ⏳ Gear menu with actions (gelecek özellik)
-   - ⏳ Bulk selection checkboxes (gelecek özellik)
-   - ⏳ Bulk actions toolbar (gelecek özellik)
+   - ✅ Gear menu with actions (clear cache)
+   - ✅ Bulk selection checkboxes (multi-select)
+   - ✅ Bulk actions toolbar (clear selected)
 8. ⏳ Testing - BEKLIYOR
    - Unit tests
    - Integration tests

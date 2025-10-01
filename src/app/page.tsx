@@ -213,6 +213,10 @@ function Dashboard({ config }: { config: AppConfig }) {
   const [limitProjects, setLimitProjects] = useState<number | undefined>(undefined); // Default boş
   const [cachedProjects, setCachedProjects] = useState<any[]>([]);
   const [isLoadingCache, setIsLoadingCache] = useState(true);
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const { addLog } = useLog();
 
   // Load cached projects on mount
@@ -252,6 +256,22 @@ function Dashboard({ config }: { config: AppConfig }) {
       reloadCache();
     }
   }, [scanResults, isScanning]);
+
+  // Close dropdown menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (openMenuId) {
+        setOpenMenuId(null);
+      }
+    };
+
+    if (openMenuId) {
+      document.addEventListener('click', handleClickOutside);
+      return () => {
+        document.removeEventListener('click', handleClickOutside);
+      };
+    }
+  }, [openMenuId]);
 
   const startScan = async () => {
     try {
@@ -345,6 +365,121 @@ function Dashboard({ config }: { config: AppConfig }) {
   const clearCredentials = () => {
     CredentialManager.clearCredentials();
     window.location.reload();
+  };
+
+  // Helper functions for checkbox management
+  const toggleSelectAll = () => {
+    if (selectedProjects.size === cachedProjects.length) {
+      setSelectedProjects(new Set());
+    } else {
+      setSelectedProjects(new Set(cachedProjects.map(p => p.id)));
+    }
+  };
+
+  const toggleSelectProject = (projectId: string, currentIndex: number, isShiftClick: boolean) => {
+    const newSelected = new Set(selectedProjects);
+    
+    // Shift+Click range selection
+    if (isShiftClick && lastClickedIndex !== null) {
+      // Range: lastClickedIndex + 1'den currentIndex'e kadar (dahil)
+      const rangeStart = Math.min(lastClickedIndex, currentIndex);
+      const rangeEnd = Math.max(lastClickedIndex, currentIndex);
+      
+      // Son tıklananın bir sonrasından başla, yeni tıklanana kadar toggle et
+      for (let i = rangeStart + 1; i <= rangeEnd; i++) {
+        const rangeProjectId = cachedProjects[i].id;
+        if (newSelected.has(rangeProjectId)) {
+          newSelected.delete(rangeProjectId);
+        } else {
+          newSelected.add(rangeProjectId);
+        }
+      }
+    } else {
+      // Normal toggle - sadece tıklanan item
+      if (newSelected.has(projectId)) {
+        newSelected.delete(projectId);
+      } else {
+        newSelected.add(projectId);
+      }
+    }
+    
+    setSelectedProjects(newSelected);
+    setLastClickedIndex(currentIndex);
+  };
+
+  const isAllSelected = cachedProjects.length > 0 && selectedProjects.size === cachedProjects.length;
+  const isIndeterminate = selectedProjects.size > 0 && selectedProjects.size < cachedProjects.length;
+
+  // Clear single project cache
+  const clearSingleProjectCache = async (projectId: string, projectName: string) => {
+    try {
+      setIsClearingCache(true);
+      addLog('info', `"${projectName}" projesi cache'i temizleniyor...`, 'Cache');
+      
+      const response = await fetch(`/api/cache/${projectId}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        throw new Error('Cache temizleme başarısız');
+      }
+
+      addLog('success', `"${projectName}" projesi cache'i temizlendi`, 'Cache');
+      
+      // Reload cached projects
+      const reloadResponse = await fetch('/api/cache/projects');
+      if (reloadResponse.ok) {
+        const projects = await reloadResponse.json();
+        setCachedProjects(projects);
+      }
+      
+      setOpenMenuId(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
+      addLog('error', `Cache temizleme hatası: ${message}`, 'Cache');
+    } finally {
+      setIsClearingCache(false);
+    }
+  };
+
+  // Clear multiple projects cache
+  const clearSelectedProjectsCache = async () => {
+    if (selectedProjects.size === 0) return;
+
+    try {
+      setIsClearingCache(true);
+      addLog('info', `${selectedProjects.size} proje cache'i temizleniyor...`, 'Cache');
+      
+      const response = await fetch('/api/cache/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          projectIds: Array.from(selectedProjects)
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Bulk cache temizleme başarısız');
+      }
+
+      addLog('success', `${selectedProjects.size} proje cache'i temizlendi`, 'Cache');
+      
+      // Reload cached projects
+      const reloadResponse = await fetch('/api/cache/projects');
+      if (reloadResponse.ok) {
+        const projects = await reloadResponse.json();
+        setCachedProjects(projects);
+      }
+      
+      setSelectedProjects(new Set());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
+      addLog('error', `Bulk cache temizleme hatası: ${message}`, 'Cache');
+    } finally {
+      setIsClearingCache(false);
+    }
   };
 
   return (
@@ -452,20 +587,64 @@ function Dashboard({ config }: { config: AppConfig }) {
           {/* Cached Projects List */}
           {!isLoadingCache && cachedProjects.length > 0 && (
             <div style={{ marginBottom: '20px' }}>
-              <h3>Cached Projects ({cachedProjects.length})</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h3>Cached Projects ({cachedProjects.length})</h3>
+                {selectedProjects.size > 0 && (
+                  <button
+                    onClick={clearSelectedProjectsCache}
+                    disabled={isClearingCache}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: isClearingCache ? '#ccc' : '#dc3545',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: isClearingCache ? 'not-allowed' : 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    {isClearingCache ? 'Temizleniyor...' : `Clear Selected (${selectedProjects.size})`}
+                  </button>
+                )}
+              </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '12px', textAlign: 'center', border: '1px solid #ddd', width: '40px' }}>
+                      <input
+                        type="checkbox"
+                        checked={isAllSelected}
+                        ref={(el) => {
+                          if (el) {
+                            el.indeterminate = isIndeterminate;
+                          }
+                        }}
+                        onChange={toggleSelectAll}
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Project Name</th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Platforms</th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Total Builds</th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Last Scanned</th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Status</th>
+                    <th style={{ padding: '12px', textAlign: 'center', border: '1px solid #ddd', width: '60px' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {cachedProjects.map((project: any) => (
+                  {cachedProjects.map((project: any, index: number) => (
                     <tr key={project.id}>
+                      <td style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedProjects.has(project.id)}
+                          onChange={() => {}}
+                          onClick={(e) => {
+                            toggleSelectProject(project.id, index, e.shiftKey);
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </td>
                       <td style={{ padding: '12px', border: '1px solid #ddd' }}>{project.name}</td>
                       <td style={{ padding: '12px', border: '1px solid #ddd' }}>
                         {project.platforms && project.platforms.length > 0 
@@ -488,6 +667,57 @@ function Dashboard({ config }: { config: AppConfig }) {
                         }}>
                           CACHED
                         </span>
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center', position: 'relative' }}>
+                        <button
+                          onClick={() => setOpenMenuId(openMenuId === project.id ? null : project.id)}
+                          disabled={isClearingCache}
+                          style={{
+                            padding: '4px 8px',
+                            backgroundColor: 'transparent',
+                            border: '1px solid #ccc',
+                            borderRadius: '4px',
+                            cursor: isClearingCache ? 'not-allowed' : 'pointer',
+                            fontSize: '16px'
+                          }}
+                          title="Actions"
+                        >
+                          ⚙️
+                        </button>
+                        {openMenuId === project.id && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              right: '10px',
+                              top: '40px',
+                              backgroundColor: 'white',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                              zIndex: 1000,
+                              minWidth: '150px'
+                            }}
+                          >
+                            <button
+                              onClick={() => clearSingleProjectCache(project.id, project.name)}
+                              disabled={isClearingCache}
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                backgroundColor: 'white',
+                                border: 'none',
+                                textAlign: 'left',
+                                cursor: isClearingCache ? 'not-allowed' : 'pointer',
+                                fontSize: '14px',
+                                color: '#dc3545'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                            >
+                              🗑️ Clear Cache
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}

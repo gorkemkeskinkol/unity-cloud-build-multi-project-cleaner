@@ -225,7 +225,7 @@ ApiClient error handling devreye girer
 [Hata tipi nedir?]
     ├─ Network Error → Retry logic (3 kez)
     ├─ Auth Error → Credentials invalid notification
-    ├─ Rate Limit → Delay + retry
+    ├─ Rate Limit (403) → Exponential backoff + retry (2s, 4s, 8s)
     └─ Server Error → Log + user notification
     ↓
 LogContext.addLog(error details, ERROR)
@@ -236,11 +236,35 @@ NotificationService.showError(user-friendly message)
     └─ ScanOrchestrator.cancelScan()
 ```
 
+### Rate Limiting Mekanizması
+```
+Unity API 403 döndürür (abuse detection)
+    ↓
+ApiClient retry logic devreye girer
+    ├─ 1. Deneme başarısız → 2 saniye bekle
+    ├─ 2. Deneme başarısız → 4 saniye bekle
+    └─ 3. Deneme başarısız → 8 saniye bekle
+    ↓
+[Tüm denemeler başarısız ise]
+    └─ ApiError throw et (HTTP 403)
+```
+
+### Proje Tarama Rate Limiting
+```
+Her proje taraması tamamlandığında:
+    ↓
+500ms bekleme (Unity API abuse detection için)
+    ↓
+Bir sonraki projeye geç
+```
+
 ### Kritik Noktalar
 - Network errors için automatic retry
 - Authentication errors için immediate user feedback
-- Rate limiting için intelligent backoff
+- **Rate limiting (403) için exponential backoff** (2s → 4s → 8s)
+- **Proje taramaları arası 500ms delay** (Unity API abuse detection)
 - Partial results korunur ve kullanıcıya sunulur
+- Retry mekanizması maksimum 3 deneme yapar
 
 ---
 

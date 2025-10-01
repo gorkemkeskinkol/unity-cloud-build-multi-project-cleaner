@@ -211,13 +211,15 @@ export class ScanOrchestrator {
                   await db.saveBuildCount(targetId, buildCount, scanResultId);
                 } catch (error) {
                   // Build count hatası kritik değil, devam et
-                  this.log('warning', `${projectName} - ${target.name}: Build count alınamadı`, 'ScanOrchestrator');
+                  const errorMsg = error instanceof Error ? error.message : String(error);
+                  this.log('warning', `${projectName} - ${target.name}: Build count alınamadı - ${errorMsg}`, 'ScanOrchestrator');
                 }
               }
             }
           } catch (error) {
             // Build target bilgilerini kaydetme hatası kritik değil
-            this.log('warning', `${projectName}: Build target bilgileri kaydedilemedi`, 'ScanOrchestrator');
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            this.log('warning', `${projectName}: Build target bilgileri kaydedilemedi - ${errorMsg}`, 'ScanOrchestrator');
           }
 
           // TÜM kayıtlar başarıyla tamamlandı - şimdi lastScannedAt'ı güncelle
@@ -266,8 +268,8 @@ export class ScanOrchestrator {
           freshProjects++;
         }
 
-        // Kısa bir bekleme (rate limiting için)
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Rate limiting için bekleme (Unity API abuse detection için)
+        await new Promise(resolve => setTimeout(resolve, 700));
       }
 
       const summary: ScanSummary = {

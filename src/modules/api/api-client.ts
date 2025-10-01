@@ -35,52 +35,99 @@ export class ApiClient {
   }
 
   async get<T>(endpoint: string, params?: Record<string, string | number>): Promise<Response> {
-    let url: URL;
-    
-    if (this.isServerSide) {
-      // Server-side: Direkt Unity API'ye git
-      url = new URL(`${UNITY_API_BASE}${endpoint}`);
-    } else {
-      // Client-side: Next.js API routes kullan
-      const fullUrl = `${window.location.origin}${NEXTJS_API_BASE}${endpoint}`;
-      url = new URL(fullUrl);
-    }
-    
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        url.searchParams.append(key, value.toString());
-      }
-    }
+    const maxRetries = 3;
+    let lastError: ApiError | null = null;
 
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: this.headers,
-      signal: AbortSignal.timeout(30000) // 30s timeout
-    });
-
-    if (!response.ok) {
-      // Body'yi bir kez text olarak oku
-      const errorText = await response.text();
-      
-      // JSON parse etmeyi dene
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const errorData = JSON.parse(errorText);
-        throw new ApiError({
-          status: response.status,
-          message: errorData.error || `HTTP ${response.status}`,
-          details: errorData.details
+        let url: URL;
+        
+        if (this.isServerSide) {
+          // Server-side: Direkt Unity API'ye git
+          url = new URL(`${UNITY_API_BASE}${endpoint}`);
+        } else {
+          // Client-side: Next.js API routes kullan
+          const fullUrl = `${window.location.origin}${NEXTJS_API_BASE}${endpoint}`;
+          url = new URL(fullUrl);
+        }
+        
+        if (params) {
+          for (const [key, value] of Object.entries(params)) {
+            url.searchParams.append(key, value.toString());
+          }
+        }
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          headers: this.headers,
+          signal: AbortSignal.timeout(30000) // 30s timeout
         });
-      } catch (jsonError) {
-        // JSON değilse text olarak kullan
-        throw new ApiError({
-          status: response.status,
-          message: `HTTP ${response.status}`,
-          details: errorText.slice(0, 200)
-        });
+
+        if (!response.ok) {
+          // Body'yi bir kez text olarak oku
+          const errorText = await response.text();
+          
+          // JSON parse etmeyi dene
+          try {
+            const errorData = JSON.parse(errorText);
+            const apiError = new ApiError({
+              status: response.status,
+              message: errorData.error || `HTTP ${response.status}`,
+              details: errorData.details
+            });
+            
+            // 403 (rate limit) ise ve henüz deneme hakkımız varsa, bekle ve tekrar dene
+            if (response.status === 403 && attempt < maxRetries) {
+              const waitTime = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+              console.warn(`[API RETRY] 403 alındı, ${waitTime}ms bekleyip tekrar denenecek (${attempt}/${maxRetries})`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              lastError = apiError;
+              continue; // Bir sonraki denemeye geç
+            }
+            
+            throw apiError;
+          } catch (jsonError) {
+            // JSON değilse text olarak kullan
+            const apiError = new ApiError({
+              status: response.status,
+              message: `HTTP ${response.status}`,
+              details: errorText.slice(0, 200)
+            });
+            
+            // 403 (rate limit) ise ve henüz deneme hakkımız varsa, bekle ve tekrar dene
+            if (response.status === 403 && attempt < maxRetries) {
+              const waitTime = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+              console.warn(`[API RETRY] 403 alındı, ${waitTime}ms bekleyip tekrar denenecek (${attempt}/${maxRetries})`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              lastError = apiError;
+              continue; // Bir sonraki denemeye geç
+            }
+            
+            throw apiError;
+          }
+        }
+
+        return response;
+      } catch (error) {
+        // Eğer ApiError ise ve 403 ise, retry logic zaten çalıştı
+        if (error instanceof ApiError) {
+          if (error.status === 403 && attempt < maxRetries) {
+            lastError = error;
+            continue;
+          }
+          throw error;
+        }
+        // Diğer hatalar için direkt throw et
+        throw error;
       }
     }
 
-    return response;
+    // Tüm denemeler başarısız oldu
+    throw lastError || new ApiError({
+      status: 500,
+      message: 'Maksimum deneme sayısına ulaşıldı',
+      details: 'API rate limit nedeniyle tüm denemeler başarısız oldu'
+    });
   }
 
   /**

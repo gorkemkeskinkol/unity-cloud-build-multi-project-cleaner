@@ -117,16 +117,9 @@ export class DatabaseService {
       // En son scan result'ı al
       const latestScanResult = p.scanResults[0];
       
-      // Toplam build sayısını hesapla - sadece en son scan'e ait build_counts'ları topla
-      let totalBuilds = 0;
-      if (latestScanResult) {
-        totalBuilds = p.buildTargets.reduce((sum, target) => {
-          const targetBuildCount = target.buildCounts
-            .filter(bc => bc.scanResultId === latestScanResult.id)
-            .reduce((tSum, bc) => tSum + bc.count, 0);
-          return sum + targetBuildCount;
-        }, 0);
-      }
+      // Toplam build sayısını ScanResult'tan al (buildCounts'tan değil)
+      // Çünkü buildCounts kaydedilirken hata olabilir ama ScanResult.totalBuilds her zaman doğru
+      const totalBuilds = latestScanResult?.totalBuilds || 0;
 
       return {
         id: p.id,

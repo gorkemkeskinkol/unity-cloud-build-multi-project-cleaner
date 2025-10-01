@@ -57,24 +57,32 @@ export class UnityCloudBuildService {
    * Python scriptindeki count_builds_for_target fonksiyonunun karşılığı
    */
   async countBuilds(projectId: string, buildTargetId: string): Promise<number> {
-    const orgId = this.apiClient.getOrgId();
-    
-    // buildtarget id path segmentini güvenli hale getir (Python'daki quote karşılığı)
-    const encodedBuildTargetId = encodeURIComponent(buildTargetId);
-    
-    const response = await this.apiClient.get(
-      `/orgs/${orgId}/projects/${projectId}/buildtargets/${encodedBuildTargetId}/builds`,
-      {
-        per_page: 1,
-        page: 1
-      }
-    );
+    try {
+      const orgId = this.apiClient.getOrgId();
+      
+      // buildtarget id path segmentini güvenli hale getir (Python'daki quote karşılığı)
+      const encodedBuildTargetId = encodeURIComponent(buildTargetId);
+      
+      const endpoint = `/orgs/${orgId}/projects/${projectId}/buildtargets/${encodedBuildTargetId}/builds`;
+      console.log(`[COUNT_BUILDS] Endpoint: ${endpoint}`);
+      
+      const response = await this.apiClient.get(
+        endpoint,
+        {
+          per_page: 1,
+          page: 1
+        }
+      );
 
-    const total = this.apiClient.getContentRangeTotal(response);
-    const contentRangeHeader = response.headers.get('Content-Range');
-    
-    console.log(`    ↳ target=${buildTargetId}  Content-Range=${contentRangeHeader}  -> ${total}`);
-    return total;
+      const total = this.apiClient.getContentRangeTotal(response);
+      const contentRangeHeader = response.headers.get('Content-Range');
+      
+      console.log(`    ↳ target=${buildTargetId}  Content-Range=${contentRangeHeader}  -> ${total}`);
+      return total;
+    } catch (error) {
+      console.error(`[COUNT_BUILDS ERROR] projectId=${projectId}, targetId=${buildTargetId}:`, error);
+      throw error;
+    }
   }
 
   /**

@@ -255,6 +255,23 @@ const response = await fetch('/api/cache/bulk', {
      - Stream event gönderme fonksiyonuna error handling ekleme
    - **Etki**: SSE stream ve API error handling artık güvenilir çalışıyor
 
+3. **Cache'de Yanlış Build Sayısı Gösterimi (Çözüldü - 01.10.2025)** ✅
+   - **Sorun**: Cache'deki projelerde build sayısı 0 olarak gösteriliyordu (ör: Hyper Flywings 10 build yerine 0)
+   - **Kök Neden**: `getAllCachedProjects()` metodu build sayısını `buildCounts` tablosundan hesaplıyordu. Ancak scan sırasında bir build target'ın build count'u alınırken hata olursa, `buildCounts` tablosuna kayıt atılmıyor ama `ScanResult.totalBuilds` doğru kaydediliyordu.
+   - **Çözüm**: `getAllCachedProjects()` metodunda build sayısını `buildCounts` tablosundan hesaplamak yerine doğrudan `ScanResult.totalBuilds` değerini kullanmaya geçildi.
+   - **Kod Değişikliği**: 
+     ```typescript
+     // ÖNCE:
+     totalBuilds = p.buildTargets.reduce((sum, target) => {
+       const targetBuildCount = target.buildCounts...
+       return sum + targetBuildCount;
+     }, 0);
+     
+     // SONRA:
+     const totalBuilds = latestScanResult?.totalBuilds || 0;
+     ```
+   - **Etki**: Cache'deki projeler artık doğru build sayısını gösteriyor
+
 ### Aktif İssue'lar
 
 Şu anda bilinen aktif bir issue bulunmamaktadır.

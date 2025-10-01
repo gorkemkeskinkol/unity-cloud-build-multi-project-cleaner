@@ -308,6 +308,135 @@ export class ScanOrchestrator {
   }
 
   /**
+   * Tek bir projeyi tara ve cache'e kaydet
+   * Build silme sonrası projeyi güncel bilgilerle cache'e geri eklemek için kullanılır
+   */
+  async scanSingleProject(
+    projectId: string,
+    options: {
+      orgId: string;
+      apiKey: string;
+      projectName?: string;
+      limitTargets?: number;
+    }
+  ): Promise<ProjectScanResult> {
+    this.log('info', `Tek proje taraması başlatılıyor: ${options.projectName || projectId}`, 'ScanOrchestrator');
+
+    const unityService = new UnityCloudBuildService(options.orgId, options.apiKey);
+    const db = DatabaseService.getInstance();
+
+    try {
+      // Organization'ı database'e kaydet
+      await db.upsertOrganization(options.orgId);
+
+      // Proje bilgisini API'den çek
+      let projectName = options.projectName;
+      if (!projectName) {
+        // Proje adını projeler listesinden bul
+        const projects = await unityService.listProjects();
+        const project = projects.find((p: any) => 
+          (p.projectid || p.projectId || p.id) === projectId
+        );
+        projectName = project?.name || projectId;
+      }
+
+      this.log('info', `${projectName}: API'den taranıyor...`, 'ScanOrchestrator');
+      const startTime = Date.now();
+
+      // Build sayılarını al
+      const result = await unityService.getTotalBuildsForProject(
+        projectId,
+        options.limitTargets
+      );
+
+      const scanStatus: 'completed' | 'failed' | 'partial' = 
+        result.errors.length === 0 ? 'completed' : 
+        result.scannedTargets > 0 ? 'partial' : 'failed';
+
+      const completedAt = new Date();
+      const durationMs = Date.now() - startTime;
+
+      // Önce projeyi kaydet (ama lastScannedAt olmadan)
+      await db.saveProject({
+        id: projectId,
+        name: projectName,
+        organizationId: options.orgId,
+        lastScannedAt: undefined // Henüz set etme
+      });
+
+      // Scan result'ı kaydet
+      const scanResultId = await db.saveScanResult({
+        projectId,
+        status: scanStatus,
+        totalBuilds: result.totalBuilds,
+        totalTargets: result.targetCount,
+        scannedTargets: result.scannedTargets,
+        errorMessage: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+        startedAt: new Date(startTime),
+        completedAt,
+        durationMs
+      });
+
+      // Build targets bilgilerini çek ve kaydet
+      try {
+        const targets = await unityService.listBuildTargets(projectId);
+        const targetsToSave = options.limitTargets ? targets.slice(0, options.limitTargets) : targets;
+        
+        for (const target of targetsToSave) {
+          const targetId = target.buildtargetid || target.buildTargetId || '';
+          if (targetId) {
+            await db.saveBuildTarget({
+              id: targetId,
+              name: target.name,
+              platform: target.platform,
+              projectId,
+              enabled: target.enabled ?? true
+            });
+
+            // Build count'u API'den çek ve kaydet
+            try {
+              const buildCount = await unityService.countBuilds(projectId, targetId);
+              await db.saveBuildCount(targetId, buildCount, scanResultId);
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              this.log('warning', `${projectName} - ${target.name}: Build count alınamadı - ${errorMsg}`, 'ScanOrchestrator');
+            }
+          }
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        this.log('warning', `${projectName}: Build target bilgileri kaydedilemedi - ${errorMsg}`, 'ScanOrchestrator');
+      }
+
+      // TÜM kayıtlar başarıyla tamamlandı - şimdi lastScannedAt'ı güncelle
+      await db.saveProject({
+        id: projectId,
+        name: projectName,
+        organizationId: options.orgId,
+        lastScannedAt: completedAt
+      });
+
+      this.log('success', `✓ ${projectName}: ${result.totalBuilds} builds (${result.scannedTargets}/${result.targetCount} targets)`, 'ScanOrchestrator');
+
+      return {
+        projectId,
+        projectName,
+        totalBuilds: result.totalBuilds,
+        targetCount: result.targetCount,
+        scannedTargets: result.scannedTargets,
+        status: scanStatus,
+        errors: result.errors,
+        isFromCache: false
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log('error', `Tek proje taraması başarısız: ${errorMessage}`, 'ScanOrchestrator');
+      throw error;
+    }
+  }
+
+  /**
    * Scan'i iptal et
    */
   cancelScan(): void {

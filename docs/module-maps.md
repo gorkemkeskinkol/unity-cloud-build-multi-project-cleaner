@@ -112,6 +112,30 @@ interface UnityCloudBuildService {
 
 **Durum**: ✅ Tamamlandı - CORS sorunu çözüldü, tüm Unity API endpoint'leri proxy edildi
 
+**Next.js 15 Breaking Change - Async Params:**
+Next.js 15'te dinamik route parametreleri (`params`) artık asenkron hale geldi. Tüm route handler'larda:
+```typescript
+// ❌ Eski (Next.js 14)
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { projectId: string } }
+) {
+  const { projectId } = params;
+}
+
+// ✅ Yeni (Next.js 15)
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ projectId: string }> }
+) {
+  const { projectId } = await params;
+}
+```
+**Etkilenen Dosyalar:**
+- `src/app/api/cache/[projectId]/route.ts` ✅ Güncellendi
+- `src/app/api/unity/orgs/[orgId]/projects/[projectId]/delete-builds/route.ts` ✅ Güncellendi
+- Diğer dinamik route'lar zaten günceldi
+
 ---
 
 ## Database Management System (DMS) Modülleri

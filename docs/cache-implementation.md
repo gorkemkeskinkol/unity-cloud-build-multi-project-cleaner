@@ -272,6 +272,22 @@ const response = await fetch('/api/cache/bulk', {
      ```
    - **Etki**: Cache'deki projeler artık doğru build sayısını gösteriyor
 
+4. **Build Silme Sonrası Cache Kaybı (Çözüldü - 01.10.2025)** ✅
+   - **Sorun**: Build artifact'leri silindikten sonra proje cache'den temizleniyor ama tekrar fetchlenmiyor, dolayısıyla proje listeden kayboluyordu
+   - **Kök Neden**: Delete builds API endpoint'i cache'i temizliyordu ama projeyi tekrar taramıyordu
+   - **Çözüm**: 
+     - `ScanOrchestrator.scanSingleProject()` metodu eklendi
+     - Delete builds endpoint'i cache'i temizledikten sonra projeyi tekrar tarıyor
+     - Proje güncel bilgilerle cache'e geri ekleniyor
+   - **İş Akışı**:
+     1. Build artifact'leri siliniyor
+     2. Cache temizleniyor (`DELETE /api/cache/${projectId}`)
+     3. Proje tekrar taranıyor (`scanSingleProject`)
+     4. Güncel bilgilerle cache'e ekleniyor
+     5. Frontend otomatik cache reload yapıyor
+     6. Proje listede güncel bilgilerle görünüyor
+   - **Etki**: Build silme sonrası proje listeden kaybolmuyor, güncel durumu yansıtıyor
+
 ### Aktif İssue'lar
 
 Şu anda bilinen aktif bir issue bulunmamaktadır.

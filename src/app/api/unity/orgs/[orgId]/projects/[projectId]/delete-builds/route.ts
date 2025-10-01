@@ -4,10 +4,10 @@ import { CredentialManager } from '@/modules/config/credential-manager';
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { orgId: string; projectId: string } }
+  { params }: { params: Promise<{ orgId: string; projectId: string }> }
 ) {
   try {
-    const { orgId, projectId } = params;
+    const { orgId, projectId } = await params;
 
     // Get credentials from request headers
     const apiKey = request.headers.get('x-api-key');
@@ -67,12 +67,12 @@ export async function DELETE(
 
           // Sonuç logları
           if (result.errors.length > 0) {
-            sendLog('warning', `${result.deletedTargets}/${result.totalTargets} target'ın artifact'leri silindi`, 'DeleteBuilds');
+            sendLog('warning', `${result.deletedTargets}/${result.totalTargets} target artifact silindi`, 'DeleteBuilds');
             result.errors.forEach(err => {
               sendLog('error', `${err.targetName}: ${err.error}`, 'DeleteBuilds');
             });
           } else {
-            sendLog('success', `✓ Tüm artifact'ler başarıyla silindi (${result.deletedTargets} target)`, 'DeleteBuilds');
+            sendLog('success', `✓ Tüm artifactler başarıyla silindi (${result.deletedTargets} target)`, 'DeleteBuilds');
           }
 
           // Cache güncelleme
@@ -80,7 +80,7 @@ export async function DELETE(
             sendLog('info', 'Cache güncelleniyor...', 'DeleteBuilds');
             
             try {
-              // Cache'i temizle
+              // Önce cachei temizle
               const cacheResponse = await fetch(
                 `${request.nextUrl.origin}/api/cache/${projectId}`,
                 { method: 'DELETE' }
@@ -88,6 +88,32 @@ export async function DELETE(
 
               if (cacheResponse.ok) {
                 sendLog('success', '✓ Cache temizlendi', 'DeleteBuilds');
+                
+                // Projeyi tekrar tara ve cachee geri ekle
+                sendLog('info', "Proje cachee tekrar ekleniyor...", 'DeleteBuilds');
+                
+                try {
+                  const { ScanOrchestrator } = await import('@/modules/scanning/scan-orchestrator');
+                  const orchestrator = new ScanOrchestrator();
+                  
+                  // Log callback'ini ayarla
+                  orchestrator.setLogCallback((level, message, source) => {
+                    sendLog(level, message, source || 'DeleteBuilds');
+                  });
+                  
+                  // Tek proje taraması yap
+                  const scanResult = await orchestrator.scanSingleProject(projectId, {
+                    orgId,
+                    apiKey,
+                    projectName: result.deletedTargets > 0 ? undefined : projectId
+                  });
+                  
+                  sendLog('success', `✓ Proje güncel bilgilerle cachee eklendi (${scanResult.totalBuilds} builds)`, 'DeleteBuilds');
+                } catch (rescanError) {
+                  const rescanErrorMsg = rescanError instanceof Error ? rescanError.message : String(rescanError);
+                  sendLog('warning', `Proje cachee eklenemedi: ${rescanErrorMsg}`, 'DeleteBuilds');
+                  sendLog('info', "Manuel scan yaparak projeyi cachee ekleyebilirsiniz", 'DeleteBuilds');
+                }
               } else {
                 sendLog('warning', 'Cache temizleme başarısız', 'DeleteBuilds');
               }

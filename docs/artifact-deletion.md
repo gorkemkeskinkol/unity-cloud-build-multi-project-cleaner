@@ -158,13 +158,25 @@ API rate limit'e takılırsa:
 
 ## Cache Yönetimi
 
-### Otomatik Cache Güncelleme
+### Otomatik Cache Güncelleme (v2 - Güncel)
 Artifact silme işleminden sonra:
 1. Cache temizleme endpoint'i çağrılır
-2. Frontend cache'i reload eder
-3. Project tablosu güncellenir
+2. **Proje tekrar taranır ve güncel bilgilerle cache'e eklenir**
+3. Frontend otomatik olarak cache'i reload eder
+4. Proje listede güncel bilgilerle görünür
 
-**Not**: Build sayıları aynı kalır çünkü sadece artifact'ler silinir, build metadata'ları kalır
+**Önemli**: Proje cache'den silinir, ardından güncel bilgileriyle tekrar taranıp cache'e eklenir. Böylece proje listeden kaybolmaz ve her zaman güncel durumu yansıtır.
+
+**Not**: Build sayıları aynı kalır çünkü sadece artifact'ler silinir, build metadata'ları Unity'de kalır
+
+### Re-scan İşlemi Detayları
+Build silme sonrası yapılan re-scan işlemi:
+- `ScanOrchestrator.scanSingleProject()` metodu kullanılır
+- Sadece ilgili proje taranır (tüm projeler değil)
+- Build target'leri ve build sayıları güncel olarak alınır
+- `lastScannedAt` timestamp'i güncellenir
+- Cache'e geri eklenir
+- Hata durumunda: Warning log gösterilir, kullanıcı manuel scan yapabilir
 
 ## Log Mesajları
 

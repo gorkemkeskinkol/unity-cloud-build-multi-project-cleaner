@@ -71,6 +71,7 @@ interface CredentialManager {
 ```typescript
 interface ApiClient {
   get<T>(endpoint: string, params?: object): Promise<T>
+  delete(endpoint: string): Promise<Response>
   getContentRangeTotal(response: Response): number
 }
 ```
@@ -95,9 +96,11 @@ interface UnityCloudBuildService {
   countBuilds(orgId: string, projectId: string, buildTargetId: string): Promise<number>
   sanityCheckOrg(orgId: string): Promise<number>
   getTotalBuildsForProject(projectId: string, limitTargets?: number): Promise<ScanResult>
+  deleteArtifactsForTarget(projectId: string, buildTargetId: string): Promise<void>
+  deleteAllBuildsForProject(projectId: string, onProgress?: Function): Promise<DeletionResult>
 }
 ```
-**Durum**: ✅ Tamamlandı - Tam proje scanning desteği
+**Durum**: ✅ Tamamlandı - Tam proje scanning + artifact deletion desteği
 
 ### 3. Next.js API Routes ✅
 **CORS Çözümü için Server-Side Proxy**
@@ -105,6 +108,7 @@ interface UnityCloudBuildService {
 - `src/app/api/unity/orgs/[orgId]/projects/route.ts` - Project listing
 - `src/app/api/unity/orgs/[orgId]/projects/[projectId]/buildtargets/route.ts` - Build targets
 - `src/app/api/unity/orgs/[orgId]/projects/[projectId]/buildtargets/[targetId]/builds/route.ts` - Specific builds
+- `src/app/api/unity/orgs/[orgId]/projects/[projectId]/delete-builds/route.ts` - Delete build artifacts (SSE)
 
 **Durum**: ✅ Tamamlandı - CORS sorunu çözüldü, tüm Unity API endpoint'leri proxy edildi
 

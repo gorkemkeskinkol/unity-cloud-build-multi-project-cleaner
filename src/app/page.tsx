@@ -216,6 +216,8 @@ function Dashboard({ config }: { config: AppConfig }) {
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
+  const [isDeletingBuilds, setIsDeletingBuilds] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ projectId: string; projectName: string } | null>(null);
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const { addLog } = useLog();
 
@@ -488,8 +490,170 @@ function Dashboard({ config }: { config: AppConfig }) {
     }
   };
 
+  // Delete all builds for a project
+  const deleteAllBuilds = async (projectId: string, projectName: string) => {
+    try {
+      setIsDeletingBuilds(true);
+      setOpenMenuId(null);
+      addLog('info', `"${projectName}" projesinin tüm artifact'leri siliniyor...`, 'DeleteBuilds');
+
+      const response = await fetch(`/api/unity/orgs/${config.orgId}/projects/${projectId}/delete-builds`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': config.apiKey
+        },
+        body: JSON.stringify({
+          updateCache: true
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Delete builds API hatası');
+      }
+
+      if (!response.body) {
+        throw new Error('Response body yok');
+      }
+
+      // SSE stream'ini oku
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            continue;
+          }
+          
+          if (line.startsWith('data:')) {
+            try {
+              const data = JSON.parse(line.substring(5).trim());
+              
+              if (line.includes('"level"')) {
+                addLog(data.level, data.message, data.source);
+              } else if (line.includes('"deletedTargets"')) {
+                // Complete event
+                if (data.errors.length > 0) {
+                  addLog('warning', `Artifact silme tamamlandı (${data.deletedTargets}/${data.totalTargets} başarılı)`, 'DeleteBuilds');
+                } else {
+                  addLog('success', `✓ Tüm artifact'ler silindi (${data.deletedTargets} target)`, 'DeleteBuilds');
+                }
+                
+                // Reload cache
+                const reloadResponse = await fetch('/api/cache/projects');
+                if (reloadResponse.ok) {
+                  const projects = await reloadResponse.json();
+                  setCachedProjects(projects);
+                }
+              } else if (line.includes('"message"') && !line.includes('"level"')) {
+                addLog('error', `Delete builds hatası: ${data.message}`, 'DeleteBuilds');
+              }
+            } catch (e) {
+              console.error('SSE parse error:', e, line);
+            }
+          }
+        }
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
+      addLog('error', `Delete builds hatası: ${message}`, 'DeleteBuilds');
+    } finally {
+      setIsDeletingBuilds(false);
+      setShowDeleteConfirm(null);
+    }
+  };
+
   return (
     <div style={{ padding: '20px', maxWidth: '100%', margin: '0 auto' }}>
+      {/* Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '30px',
+            borderRadius: '8px',
+            maxWidth: '500px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+          }}>
+            <h3 style={{ marginTop: 0, color: '#dc3545' }}>⚠️ Remove All Builds</h3>
+            <p style={{ marginBottom: '20px' }}>
+              <strong>{showDeleteConfirm.projectName}</strong> projesinin TÜM build artifact'leri Unity Cloud Build'den 
+              kalıcı olarak silinecek.
+            </p>
+            <div style={{
+              backgroundColor: '#fff3cd',
+              padding: '15px',
+              borderRadius: '4px',
+              marginBottom: '20px',
+              border: '1px solid #ffc107'
+            }}>
+              <p style={{ margin: 0, fontSize: '14px' }}>
+                <strong>DİKKAT:</strong> Bu işlem geri alınamaz! Build metadata'ları Unity'de kalacak, 
+                ancak tüm artifact dosyaları (APK, IPA, vb.) silinecektir.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowDeleteConfirm(null)}
+                disabled={isDeletingBuilds}
+                style={{
+                  padding: '10px 20px',
+                  backgroundColor: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: isDeletingBuilds ? 'not-allowed' : 'pointer',
+                  fontSize: '14px'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteAllBuilds(showDeleteConfirm.projectId, showDeleteConfirm.projectName)}
+                disabled={isDeletingBuilds}
+                style={{
+                  padding: '10px 20px',
+                  backgroundColor: isDeletingBuilds ? '#ccc' : '#dc3545',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: isDeletingBuilds ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 'bold'
+                }}
+              >
+                {isDeletingBuilds ? 'Deleting...' : 'DELETE ARTIFACTS'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h1>Unity Cloud Build Dashboard</h1>
         <button
@@ -701,9 +865,32 @@ function Dashboard({ config }: { config: AppConfig }) {
                               borderRadius: '4px',
                               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
                               zIndex: 1000,
-                              minWidth: '150px'
+                              minWidth: '180px'
                             }}
                           >
+                            <button
+                              onClick={() => {
+                                setShowDeleteConfirm({ projectId: project.id, projectName: project.name });
+                                setOpenMenuId(null);
+                              }}
+                              disabled={isDeletingBuilds}
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                backgroundColor: 'white',
+                                border: 'none',
+                                borderBottom: '1px solid #eee',
+                                textAlign: 'left',
+                                cursor: isDeletingBuilds ? 'not-allowed' : 'pointer',
+                                fontSize: '14px',
+                                color: '#ff4444',
+                                fontWeight: 'bold'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#fff5f5'}
+                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                            >
+                              🗑️ Remove All Builds
+                            </button>
                             <button
                               onClick={() => clearSingleProjectCache(project.id, project.name)}
                               disabled={isClearingCache}
@@ -720,7 +907,7 @@ function Dashboard({ config }: { config: AppConfig }) {
                               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
                               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
                             >
-                              🗑️ Clear Cache
+                              Clear Cache
                             </button>
                           </div>
                         )}

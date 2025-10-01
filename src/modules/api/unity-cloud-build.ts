@@ -105,6 +105,110 @@ export class UnityCloudBuildService {
   }
 
   /**
+   * Bir buildtarget'ın tüm artifact'lerini sil
+   */
+  async deleteArtifactsForTarget(projectId: string, buildTargetId: string): Promise<void> {
+    const orgId = this.apiClient.getOrgId();
+    const encodedBuildTargetId = encodeURIComponent(buildTargetId);
+    
+    const endpoint = `/orgs/${orgId}/projects/${projectId}/buildtargets/${encodedBuildTargetId}/builds/artifacts`;
+    console.log(`[DELETE_ARTIFACTS] Endpoint: ${endpoint}`);
+    
+    await this.apiClient.delete(endpoint);
+  }
+
+  /**
+   * Bir projenin tüm buildtarget'lerinin artifact'lerini sil
+   */
+  async deleteAllBuildsForProject(
+    projectId: string,
+    onProgress?: (current: number, total: number, targetName: string) => void
+  ): Promise<{
+    deletedTargets: number;
+    totalTargets: number;
+    errors: Array<{ targetId: string; targetName: string; error: string }>;
+  }> {
+    const errors: Array<{ targetId: string; targetName: string; error: string }> = [];
+    let deletedTargets = 0;
+
+    try {
+      // Tüm buildtarget'leri listele
+      const targets = await this.listBuildTargets(projectId);
+      const totalTargets = targets.length;
+      
+      console.log(`[DELETE_ALL_BUILDS] Proje ${projectId} için ${totalTargets} target bulundu`);
+      
+      for (let i = 0; i < targets.length; i++) {
+        const target = targets[i];
+        const buildTargetId = target.buildtargetid || target.buildTargetId;
+        const targetName = target.name || buildTargetId || 'Unknown';
+        
+        if (!buildTargetId) {
+          errors.push({
+            targetId: 'unknown',
+            targetName: targetName,
+            error: 'buildtargetid bulunamadı'
+          });
+          continue;
+        }
+
+        try {
+          // Progress callback
+          if (onProgress) {
+            onProgress(i + 1, totalTargets, targetName);
+          }
+
+          // Artifact'leri sil
+          await this.deleteArtifactsForTarget(projectId, buildTargetId);
+          deletedTargets++;
+          
+          console.log(`[DELETE_ALL_BUILDS] ✓ ${targetName} artifact'leri silindi (${i + 1}/${totalTargets})`);
+          
+          // Rate limiting için küçük delay
+          if (i < targets.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 700));
+          }
+        } catch (error) {
+          const errorMessage = error instanceof ApiError 
+            ? `${error.status}: ${error.details?.slice(0, 200)}` 
+            : String(error);
+          
+          errors.push({
+            targetId: buildTargetId,
+            targetName: targetName,
+            error: errorMessage
+          });
+          
+          console.error(`[DELETE_ALL_BUILDS] ✗ ${targetName} artifact silme hatası:`, errorMessage);
+        }
+      }
+
+      return {
+        deletedTargets,
+        totalTargets,
+        errors
+      };
+    } catch (error) {
+      // Buildtarget listelenemedi
+      const errorMessage = error instanceof ApiError 
+        ? `${error.status}: ${error.details?.slice(0, 200)}` 
+        : String(error);
+      
+      console.error(`[DELETE_ALL_BUILDS] buildtargets alınamadı:`, errorMessage);
+      
+      return {
+        deletedTargets: 0,
+        totalTargets: 0,
+        errors: [{
+          targetId: 'N/A',
+          targetName: 'N/A',
+          error: `Buildtarget listesi alınamadı: ${errorMessage}`
+        }]
+      };
+    }
+  }
+
+  /**
    * Tek bir proje için tüm build sayılarını topla
    */
   async getTotalBuildsForProject(projectId: string, limitTargets?: number): Promise<{

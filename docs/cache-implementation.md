@@ -227,7 +227,37 @@ const response = await fetch('/api/cache/bulk', {
 
 ## Known Issues
 
-Şu anda bilinen bir issue bulunmamaktadır. Backend implementasyonu tamamlanmış ve test edilmeye hazırdır.
+### Çözülen İssue'lar
+
+1. **Cache Bypass Sorunu (Çözüldü - 01.10.2025)** ✅
+   - **Sorun**: Cache'deki projeler tekrar API'den taranıyordu
+   - **Kök Neden**: `lastScannedAt` field'ı database kayıtları tamamlanmadan set ediliyordu. Eğer scan result veya build target kaydetme sırasında hata olursa, `lastScannedAt` set edilmiş ama veri yoktu.
+   - **Çözüm**: Kayıt sıralaması değiştirildi:
+     1. İlk önce proje kaydedilir (`lastScannedAt` olmadan)
+     2. Scan result kaydedilir
+     3. Build targets kaydedilir
+     4. EN SON `lastScannedAt` update edilir
+   - **Etki**: Artık cache kontrolü güvenilir çalışıyor
+
+2. **Double-Click Scan Başlatma (Çözüldü - 01.10.2025)** ✅
+   - **Sorun**: Kullanıcı scan butonuna hızlıca iki kez tıklarsa iki scan başlıyordu
+   - **Çözüm**: Frontend'e double-click guard eklendi
+   - **Etki**: Scan işlemi devam ederken yeni scan başlatılamaz
+
+3. **SSE "Body is unusable" Hatası (Çözüldü - 01.10.2025)** ✅
+   - **Sorun**: Scan başlatılırken "Body is unusable" hatası alınıyordu
+   - **Kök Neden 1**: Next.js'de `request.json()` ile body okunduktan sonra request nesnesi consumed oluyor
+   - **Kök Neden 2**: ApiClient'te response body önce `json()`, sonra `text()` ile iki kez okunmaya çalışılıyordu
+   - **Çözüm**: 
+     - **API Route**: Request body'yi önce bir değişkene kaydedip sonra SSE stream'i başlatma
+     - **ApiClient**: Response body'yi bir kez `text()` ile okuyup sonra JSON parse etme
+     - Try-catch bloklarıyla error handling iyileştirme
+     - Stream event gönderme fonksiyonuna error handling ekleme
+   - **Etki**: SSE stream ve API error handling artık güvenilir çalışıyor
+
+### Aktif İssue'lar
+
+Şu anda bilinen aktif bir issue bulunmamaktadır.
 
 ## UI Implementation
 

@@ -59,16 +59,19 @@ export class ApiClient {
     });
 
     if (!response.ok) {
+      // Body'yi bir kez text olarak oku
+      const errorText = await response.text();
+      
+      // JSON parse etmeyi dene
       try {
-        const errorData = await response.json();
+        const errorData = JSON.parse(errorText);
         throw new ApiError({
           status: response.status,
           message: errorData.error || `HTTP ${response.status}`,
           details: errorData.details
         });
       } catch (jsonError) {
-        // JSON parse edemediysek text olarak al
-        const errorText = await response.text();
+        // JSON değilse text olarak kullan
         throw new ApiError({
           status: response.status,
           message: `HTTP ${response.status}`,

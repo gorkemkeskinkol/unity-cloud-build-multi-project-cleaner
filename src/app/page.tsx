@@ -274,6 +274,12 @@ function Dashboard({ config }: { config: AppConfig }) {
   }, [openMenuId]);
 
   const startScan = async () => {
+    // Double-click guard
+    if (isScanning) {
+      addLog('warning', 'Zaten bir scan işlemi devam ediyor', 'Dashboard');
+      return;
+    }
+
     try {
       setScanResults(null);
       setIsScanning(true);

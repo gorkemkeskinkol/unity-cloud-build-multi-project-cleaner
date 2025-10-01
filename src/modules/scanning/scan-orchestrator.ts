@@ -166,13 +166,13 @@ export class ScanOrchestrator {
           const completedAt = new Date();
           const durationMs = Date.now() - startTime;
 
-          // Projeyi database'e kaydet
+          // Önce projeyi kaydet (ama lastScannedAt olmadan)
           await db.saveProject({
             id: projectId,
             name: projectName,
             organizationId: credentials.orgId,
             description: project.description,
-            lastScannedAt: completedAt
+            lastScannedAt: undefined // Henüz set etme
           });
 
           // Scan result'ı kaydet
@@ -219,6 +219,15 @@ export class ScanOrchestrator {
             // Build target bilgilerini kaydetme hatası kritik değil
             this.log('warning', `${projectName}: Build target bilgileri kaydedilemedi`, 'ScanOrchestrator');
           }
+
+          // TÜM kayıtlar başarıyla tamamlandı - şimdi lastScannedAt'ı güncelle
+          await db.saveProject({
+            id: projectId,
+            name: projectName,
+            organizationId: credentials.orgId,
+            description: project.description,
+            lastScannedAt: completedAt
+          });
 
           results.push({
             projectId,

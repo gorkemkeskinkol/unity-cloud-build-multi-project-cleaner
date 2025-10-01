@@ -28,6 +28,8 @@ export interface ProjectData {
   organizationId: string;
   description?: string;
   lastScannedAt?: Date;
+  platforms?: string[];
+  totalBuilds?: number;
 }
 
 export interface BuildTargetData {

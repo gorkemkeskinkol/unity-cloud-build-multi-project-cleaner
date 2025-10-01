@@ -130,9 +130,11 @@ function LogPanel() {
     <div style={{
       border: '1px solid #ddd',
       borderRadius: '4px',
-      height: '300px',
+      height: 'calc(100vh - 120px)',
       overflow: 'auto',
-      backgroundColor: '#f8f9fa'
+      backgroundColor: '#f8f9fa',
+      position: 'sticky',
+      top: '20px'
     }}>
       <div style={{
         padding: '10px',
@@ -140,7 +142,10 @@ function LogPanel() {
         backgroundColor: 'white',
         display: 'flex',
         justifyContent: 'space-between',
-        alignItems: 'center'
+        alignItems: 'center',
+        position: 'sticky',
+        top: 0,
+        zIndex: 1
       }}>
         <h4 style={{ margin: 0 }}>
           Real-time Logs {hasErrors && <span style={{ color: 'red' }}>⚠️</span>}
@@ -205,8 +210,48 @@ function LogPanel() {
 function Dashboard({ config }: { config: AppConfig }) {
   const [isScanning, setIsScanning] = useState(false);
   const [scanResults, setScanResults] = useState<any>(null);
-  const [limitProjects, setLimitProjects] = useState<number | undefined>(5); // Default 5 proje
+  const [limitProjects, setLimitProjects] = useState<number | undefined>(undefined); // Default boş
+  const [cachedProjects, setCachedProjects] = useState<any[]>([]);
+  const [isLoadingCache, setIsLoadingCache] = useState(true);
   const { addLog } = useLog();
+
+  // Load cached projects on mount
+  useEffect(() => {
+    const loadCachedProjects = async () => {
+      try {
+        setIsLoadingCache(true);
+        const response = await fetch('/api/cache/projects');
+        if (response.ok) {
+          const projects = await response.json();
+          setCachedProjects(projects);
+        }
+      } catch (error) {
+        console.error('Failed to load cached projects:', error);
+      } finally {
+        setIsLoadingCache(false);
+      }
+    };
+
+    loadCachedProjects();
+  }, []);
+
+  // Reload cached projects after successful scan
+  useEffect(() => {
+    if (scanResults && !isScanning) {
+      const reloadCache = async () => {
+        try {
+          const response = await fetch('/api/cache/projects');
+          if (response.ok) {
+            const projects = await response.json();
+            setCachedProjects(projects);
+          }
+        } catch (error) {
+          console.error('Failed to reload cached projects:', error);
+        }
+      };
+      reloadCache();
+    }
+  }, [scanResults, isScanning]);
 
   const startScan = async () => {
     try {
@@ -303,7 +348,7 @@ function Dashboard({ config }: { config: AppConfig }) {
   };
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div style={{ padding: '20px', maxWidth: '100%', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h1>Unity Cloud Build Dashboard</h1>
         <button
@@ -321,172 +366,250 @@ function Dashboard({ config }: { config: AppConfig }) {
         </button>
       </div>
 
-      {/* Config Info */}
-      <div style={{
-        backgroundColor: '#f8f9fa',
-        padding: '15px',
-        borderRadius: '4px',
-        marginBottom: '20px'
-      }}>
-        <h3>Configuration</h3>
-        <p><strong>Organization ID:</strong> {config.orgId}</p>
-        <p><strong>API Key:</strong> {config.apiKey.slice(0, 8)}***</p>
-        {config.limitProjects && <p><strong>Project Limit:</strong> {config.limitProjects}</p>}
-        {config.limitTargets && <p><strong>Target Limit:</strong> {config.limitTargets}</p>}
-      </div>
-
-      {/* Scan Controls */}
-      <div style={{
-        backgroundColor: '#f8f9fa',
-        padding: '15px',
-        borderRadius: '4px',
-        marginBottom: '20px'
-      }}>
-        <div style={{
-          display: 'flex',
-          gap: '15px',
-          alignItems: 'center',
-          marginBottom: '15px'
-        }}>
+      {/* Two Column Layout */}
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+        {/* Left Column - Dashboard (2/3) */}
+        <div style={{ flex: 2, minWidth: 0 }}>
+          {/* Config Info */}
           <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px'
-          }}>
-            <label htmlFor="limitProjects" style={{ fontWeight: 'bold', minWidth: '120px' }}>
-              Project Limit:
-            </label>
-            <input
-              id="limitProjects"
-              type="number"
-              min="1"
-              max="1000"
-              value={limitProjects || ''}
-              onChange={(e) => setLimitProjects(e.target.value ? parseInt(e.target.value) : undefined)}
-              placeholder="Boş = tümü"
-              disabled={isScanning}
-              style={{
-                width: '120px',
-                padding: '8px',
-                border: '1px solid #ccc',
-                borderRadius: '4px'
-              }}
-            />
-            <span style={{ color: '#666', fontSize: '14px' }}>
-              (boş bırakılırsa tüm projeler taranır)
-            </span>
-          </div>
-        </div>
-        
-        <div style={{
-          display: 'flex',
-          gap: '10px'
-        }}>
-          <button
-            onClick={startScan}
-            disabled={isScanning}
-            style={{
-              padding: '12px 24px',
-              backgroundColor: isScanning ? '#ccc' : '#28a745',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: isScanning ? 'not-allowed' : 'pointer',
-              fontSize: '16px'
-            }}
-          >
-            {isScanning ? 'Scanning (Server-Side)...' : 'Start Project Scan'}
-          </button>
-        </div>
-      </div>
-
-      {/* Scanning Indicator */}
-      {isScanning && (
-        <div style={{
-          backgroundColor: '#fff3cd',
-          padding: '15px',
-          borderRadius: '4px',
-          marginBottom: '20px',
-          border: '1px solid #ffc107'
-        }}>
-          <h4>⏳ Scan İşleniyor (Server-Side)</h4>
-          <p>Projeler server-side taranıyor ve cache'leniyor. Lütfen bekleyin...</p>
-          <p style={{ fontSize: '14px', color: '#666', marginTop: '10px' }}>
-            Log panelinde detaylı ilerleme görebilirsiniz.
-          </p>
-        </div>
-      )}
-
-      {/* Results */}
-      {scanResults && (
-        <div style={{ marginBottom: '20px' }}>
-          <h3>Scan Results</h3>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '15px',
+            backgroundColor: '#f8f9fa',
+            padding: '15px',
+            borderRadius: '4px',
             marginBottom: '20px'
           }}>
-            <div style={{ backgroundColor: '#d4edda', padding: '15px', borderRadius: '4px' }}>
-              <h4>Total Projects</h4>
-              <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalProjects}</p>
+            <h3>Configuration</h3>
+            <p><strong>Organization ID:</strong> {config.orgId}</p>
+            <p><strong>API Key:</strong> {config.apiKey.slice(0, 8)}***</p>
+            {config.limitProjects && <p><strong>Project Limit:</strong> {config.limitProjects}</p>}
+            {config.limitTargets && <p><strong>Target Limit:</strong> {config.limitTargets}</p>}
+          </div>
+
+          {/* Scan Controls */}
+          <div style={{
+            backgroundColor: '#f8f9fa',
+            padding: '15px',
+            borderRadius: '4px',
+            marginBottom: '20px'
+          }}>
+            <div style={{
+              display: 'flex',
+              gap: '15px',
+              alignItems: 'center',
+              marginBottom: '15px'
+            }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px'
+              }}>
+                <label htmlFor="limitProjects" style={{ fontWeight: 'bold', minWidth: '120px' }}>
+                  Project Limit:
+                </label>
+                <input
+                  id="limitProjects"
+                  type="number"
+                  min="1"
+                  max="1000"
+                  value={limitProjects || ''}
+                  onChange={(e) => setLimitProjects(e.target.value ? parseInt(e.target.value) : undefined)}
+                  placeholder="Boş = tümü"
+                  disabled={isScanning}
+                  style={{
+                    width: '120px',
+                    padding: '8px',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px'
+                  }}
+                />
+                <span style={{ color: '#666', fontSize: '14px' }}>
+                  (boş bırakılırsa tüm projeler taranır)
+                </span>
+              </div>
             </div>
-            <div style={{ backgroundColor: '#cce5ff', padding: '15px', borderRadius: '4px' }}>
-              <h4>Total Builds</h4>
-              <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalBuilds}</p>
-            </div>
-            <div style={{ backgroundColor: '#fff3cd', padding: '15px', borderRadius: '4px' }}>
-              <h4>Total Targets</h4>
-              <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalTargets}</p>
-            </div>
-            <div style={{ backgroundColor: scanResults.summary.totalErrors > 0 ? '#f8d7da' : '#d1ecf1', padding: '15px', borderRadius: '4px' }}>
-              <h4>Errors</h4>
-              <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalErrors}</p>
+            
+            <div style={{
+              display: 'flex',
+              gap: '10px'
+            }}>
+              <button
+                onClick={startScan}
+                disabled={isScanning}
+                style={{
+                  padding: '12px 24px',
+                  backgroundColor: isScanning ? '#ccc' : '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: isScanning ? 'not-allowed' : 'pointer',
+                  fontSize: '16px'
+                }}
+              >
+                {isScanning ? 'Scanning (Server-Side)...' : 'Start Project Scan'}
+              </button>
             </div>
           </div>
 
-          {/* Project Results Table */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f8f9fa' }}>
-                <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Project</th>
-                <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Total Builds</th>
-                <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Targets</th>
-                <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {scanResults.results.map((result: any, index: number) => (
-                <tr key={index}>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>{result.projectName}</td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>{result.totalBuilds}</td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                    {result.scannedTargets}/{result.targetCount}
-                  </td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                    <span style={{
-                      padding: '4px 8px',
-                      borderRadius: '3px',
-                      fontSize: '12px',
-                      backgroundColor:
-                        result.status === 'completed' ? '#d4edda' :
-                        result.status === 'partial' ? '#fff3cd' : '#f8d7da',
-                      color:
-                        result.status === 'completed' ? '#155724' :
-                        result.status === 'partial' ? '#856404' : '#721c24'
-                    }}>
-                      {result.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+          {/* Cached Projects List */}
+          {!isLoadingCache && cachedProjects.length > 0 && (
+            <div style={{ marginBottom: '20px' }}>
+              <h3>Cached Projects ({cachedProjects.length})</h3>
+              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Project Name</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Platforms</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Total Builds</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Last Scanned</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cachedProjects.map((project: any) => (
+                    <tr key={project.id}>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>{project.name}</td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
+                        {project.platforms && project.platforms.length > 0 
+                          ? project.platforms.join(', ') 
+                          : '-'}
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>
+                        {project.totalBuilds || 0}
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
+                        {project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString('tr-TR') : 'N/A'}
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
+                        <span style={{
+                          padding: '4px 8px',
+                          borderRadius: '3px',
+                          fontSize: '12px',
+                          backgroundColor: '#d4edda',
+                          color: '#155724'
+                        }}>
+                          CACHED
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-      {/* Log Panel */}
-      <LogPanel />
+          {isLoadingCache && (
+            <div style={{
+              backgroundColor: '#f8f9fa',
+              padding: '15px',
+              borderRadius: '4px',
+              marginBottom: '20px'
+            }}>
+              <p>Cache yükleniyor...</p>
+            </div>
+          )}
+
+          {!isLoadingCache && cachedProjects.length === 0 && (
+            <div style={{
+              backgroundColor: '#fff3cd',
+              padding: '15px',
+              borderRadius: '4px',
+              marginBottom: '20px',
+              border: '1px solid #ffc107'
+            }}>
+              <p>Henüz cache'lenmiş proje yok. Scan başlatarak projeleri cache'leyin.</p>
+            </div>
+          )}
+
+          {/* Scanning Indicator */}
+          {isScanning && (
+            <div style={{
+              backgroundColor: '#fff3cd',
+              padding: '15px',
+              borderRadius: '4px',
+              marginBottom: '20px',
+              border: '1px solid #ffc107'
+            }}>
+              <h4>⏳ Scan İşleniyor (Server-Side)</h4>
+              <p>Projeler server-side taranıyor ve cache'leniyor. Lütfen bekleyin...</p>
+              <p style={{ fontSize: '14px', color: '#666', marginTop: '10px' }}>
+                Log panelinde detaylı ilerleme görebilirsiniz.
+              </p>
+            </div>
+          )}
+
+          {/* Scan Results */}
+          {scanResults && (
+            <div style={{ marginBottom: '20px' }}>
+              <h3>Scan Results</h3>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px'
+              }}>
+                <div style={{ backgroundColor: '#d4edda', padding: '15px', borderRadius: '4px' }}>
+                  <h4>Total Projects</h4>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalProjects}</p>
+                </div>
+                <div style={{ backgroundColor: '#cce5ff', padding: '15px', borderRadius: '4px' }}>
+                  <h4>Total Builds</h4>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalBuilds}</p>
+                </div>
+                <div style={{ backgroundColor: '#fff3cd', padding: '15px', borderRadius: '4px' }}>
+                  <h4>Total Targets</h4>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalTargets}</p>
+                </div>
+                <div style={{ backgroundColor: scanResults.summary.totalErrors > 0 ? '#f8d7da' : '#d1ecf1', padding: '15px', borderRadius: '4px' }}>
+                  <h4>Errors</h4>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalErrors}</p>
+                </div>
+              </div>
+
+              {/* Project Results Table */}
+              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Project</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Total Builds</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Targets</th>
+                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanResults.results.map((result: any, index: number) => (
+                    <tr key={index}>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>{result.projectName}</td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>{result.totalBuilds}</td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
+                        {result.scannedTargets}/{result.targetCount}
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
+                        <span style={{
+                          padding: '4px 8px',
+                          borderRadius: '3px',
+                          fontSize: '12px',
+                          backgroundColor:
+                            result.status === 'completed' ? '#d4edda' :
+                            result.status === 'partial' ? '#fff3cd' : '#f8d7da',
+                          color:
+                            result.status === 'completed' ? '#155724' :
+                            result.status === 'partial' ? '#856404' : '#721c24'
+                        }}>
+                          {result.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Right Column - Log Panel (1/3) */}
+        <div style={{ flex: 1, minWidth: '300px' }}>
+          <LogPanel />
+        </div>
+      </div>
     </div>
   );
 }

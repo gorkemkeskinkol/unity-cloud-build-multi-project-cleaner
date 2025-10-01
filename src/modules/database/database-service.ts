@@ -83,6 +83,63 @@ export class DatabaseService {
     }));
   }
 
+  async getAllCachedProjects(cacheMaxAgeMs: number = 3600000): Promise<ProjectData[]> {
+    const cutoffTime = new Date(Date.now() - cacheMaxAgeMs);
+    
+    const projects = await this.prisma.project.findMany({
+      where: {
+        lastScannedAt: {
+          gte: cutoffTime
+        }
+      },
+      include: {
+        buildTargets: {
+          include: {
+            buildCounts: true
+          }
+        },
+        scanResults: {
+          orderBy: { startedAt: 'desc' },
+          take: 1
+        }
+      },
+      orderBy: { lastScannedAt: 'desc' }
+    });
+
+    return projects.map(p => {
+      // Unique platformları topla
+      const platforms = [...new Set(
+        p.buildTargets
+          .map(t => t.platform)
+          .filter((platform): platform is string => !!platform)
+      )];
+
+      // En son scan result'ı al
+      const latestScanResult = p.scanResults[0];
+      
+      // Toplam build sayısını hesapla - sadece en son scan'e ait build_counts'ları topla
+      let totalBuilds = 0;
+      if (latestScanResult) {
+        totalBuilds = p.buildTargets.reduce((sum, target) => {
+          const targetBuildCount = target.buildCounts
+            .filter(bc => bc.scanResultId === latestScanResult.id)
+            .reduce((tSum, bc) => tSum + bc.count, 0);
+          return sum + targetBuildCount;
+        }, 0);
+      }
+
+      return {
+        id: p.id,
+        name: p.name,
+        organizationId: p.organizationId,
+        description: p.description || undefined,
+        lastScannedAt: p.lastScannedAt || undefined,
+        platforms: platforms.length > 0 ? platforms : undefined,
+        totalBuilds: totalBuilds > 0 ? totalBuilds : undefined
+      };
+    });
+  }
+
   async isProjectCached(projectId: string, cacheMaxAgeMs: number = 3600000): Promise<boolean> {
     const cutoffTime = new Date(Date.now() - cacheMaxAgeMs);
     

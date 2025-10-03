@@ -61,14 +61,12 @@ export class DatabaseService {
     };
   }
 
-  async getCachedProjects(orgId: string, cacheMaxAgeMs: number = 3600000): Promise<ProjectData[]> {
-    const cutoffTime = new Date(Date.now() - cacheMaxAgeMs);
-    
+  async getCachedProjects(orgId: string): Promise<ProjectData[]> {
     const projects = await this.prisma.project.findMany({
       where: {
         organizationId: orgId,
         lastScannedAt: {
-          gte: cutoffTime
+          not: null
         }
       },
       orderBy: { lastScannedAt: 'desc' }
@@ -83,13 +81,11 @@ export class DatabaseService {
     }));
   }
 
-  async getAllCachedProjects(cacheMaxAgeMs: number = 3600000): Promise<ProjectData[]> {
-    const cutoffTime = new Date(Date.now() - cacheMaxAgeMs);
-    
+  async getAllCachedProjects(): Promise<ProjectData[]> {
     const projects = await this.prisma.project.findMany({
       where: {
         lastScannedAt: {
-          gte: cutoffTime
+          not: null
         }
       },
       include: {
@@ -133,14 +129,12 @@ export class DatabaseService {
     });
   }
 
-  async isProjectCached(projectId: string, cacheMaxAgeMs: number = 3600000): Promise<boolean> {
-    const cutoffTime = new Date(Date.now() - cacheMaxAgeMs);
-    
+  async isProjectCached(projectId: string): Promise<boolean> {
     const project = await this.prisma.project.findFirst({
       where: {
         id: projectId,
         lastScannedAt: {
-          gte: cutoffTime
+          not: null
         }
       }
     });

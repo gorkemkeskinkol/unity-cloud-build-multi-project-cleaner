@@ -2,7 +2,7 @@
 
 ## Genel Bakış
 
-Unity Cloud Build Multi-Project Cleaner uygulamasına **time-based cache sistemi** eklenmiştir. Bu sistem, taranan projelerin database'e kaydedilmesini ve sonraki taramalarda cache'den hızlı erişim sağlanmasını amaçlar.
+Unity Cloud Build Multi-Project Cleaner uygulamasına **persistent cache sistemi** eklenmiştir. Bu sistem, taranan projelerin database'e kaydedilmesini ve sonraki taramalarda cache'den hızlı erişim sağlanmasını amaçlar. Cache, manuel olarak temizlenene kadar geçerlidir; otomatik expiration yoktur.
 
 ## İmplementasyon Detayları
 
@@ -13,7 +13,7 @@ Unity Cloud Build Multi-Project Cleaner uygulamasına **time-based cache sistemi
 **Cache İşlevleri**:
 ```typescript
 // Cache kontrolü
-await db.isProjectCached(projectId, cacheMaxAgeMs) // boolean döner
+await db.isProjectCached(projectId) // boolean döner (existence check)
 
 // Cache'den veri çekme
 await db.getProject(projectId)
@@ -27,8 +27,8 @@ await db.clearAllCache(orgId) // Tüm organizasyon
 
 **Cache Mekanizması**:
 - `lastScannedAt` field'ı ile proje son tarama zamanı tutulur
-- TTL kontrolü: `lastScannedAt >= (now - cacheMaxAgeMs)`
-- Default TTL: 1 saat (3600000 ms)
+- Cache kontrolü: Proje kaydı var mı ve lastScannedAt null mu değil? (manuel clear ile korunur)
+- Cache persistent: Manual clean'e kadar geçerli
 
 ### 2. Scan Orchestrator Güncellemeleri
 
@@ -37,7 +37,7 @@ await db.clearAllCache(orgId) // Tüm organizasyon
 **Cache-Aware Scanning**:
 ```typescript
 // Her proje için
-const isCached = await db.isProjectCached(projectId, cacheMaxAgeMs);
+const isCached = await db.isProjectCached(projectId);
 
 if (isCached) {
   // Cache HIT: Database'den çek
@@ -105,7 +105,6 @@ Body: { projectIds: string[] }
 Yeni type'lar:
 - `ProjectScanResult`: Cache bilgisi içeren scan result
 - `ScanSummary`: Cache istatistikleri içeren özet
-- `ScanOptions.cacheMaxAgeMs`: TTL konfigürasyonu
 
 ## Kullanım Örnekleri
 
@@ -115,7 +114,6 @@ Yeni type'lar:
 // ScanOrchestrator'da cache-aware scanning
 const orchestrator = new ScanOrchestrator();
 const result = await orchestrator.startScan({
-  cacheMaxAgeMs: 3600000, // 1 saat
   limitProjects: 10
 });
 
@@ -151,7 +149,7 @@ const response = await fetch('/api/cache/bulk', {
 
 ## Performans İyileştirmeleri
 
-1. **Cache Hit Oranı**: Sık taranan projeler için API call'ları minimize edilir
+1. **Cache Hit Oranı**: Cache persistent olduğundan, manual clear'e kadar API call'lar minimize edilir
 2. **Bulk Operations**: Çoklu proje temizleme tek transaction'da yapılır
 3. **Cascade Delete**: İlişkili veriler otomatik temizlenir
 4. **Index Kullanımı**: `lastScannedAt` field'ı indexed
@@ -179,7 +177,6 @@ const response = await fetch('/api/cache/bulk', {
 
 ### Planlanan Özellikler
 
-- [ ] Cache expiration policies (configurable TTL)
 - [ ] Manual cache refresh (force re-scan)
 - [ ] Cache size management
 - [ ] Cache export/import
@@ -197,32 +194,32 @@ const response = await fetch('/api/cache/bulk', {
 ### 1. Cache Hit Test
 ```
 1. Projeyi tara (API'den çek)
-2. Aynı projeyi tekrar tara
-3. Beklenen: İkinci tarama cache'den gelir (isFromCache=true)
+2. Aynı projeyi tekrar tara (hemen veya günler sonra)
+3. Beklenen: İkinci tarama her zaman cache'den gelir (isFromCache=true), manual clear'e kadar
 ```
 
-### 2. Cache Expiry Test
-```
-1. Projeyi tara
-2. 1 saatten fazla bekle
-3. Projeyi tekrar tara
-4. Beklenen: Cache expired, API'den tekrar çeker
-```
-
-### 3. Cache Clear Test
+### 2. Cache Clear Test
 ```
 1. Projeyi tara (cached)
 2. Cache'i temizle (DELETE /api/cache/[id])
 3. Projeyi tekrar tara
-4. Beklenen: API'den yeni tarama yapar
+4. Beklenen: API'den yeni tarama yapar (isFromCache=false)
 ```
 
-### 4. Bulk Clear Test
+### 3. Bulk Clear Test
 ```
 1. 5 proje tara (hepsi cached)
 2. 3'ünün cache'ini bulk clear ile temizle
 3. 5 projeyi tekrar tara
 4. Beklenen: 2'si cached, 3'ü fresh scan
+```
+
+### 4. Persistent Cache Test
+```
+1. Projeyi tara
+2. Uygulamayı kapat/aç, günler bekle
+3. Projeyi tekrar tara
+4. Beklenen: Cache'den gelir (no automatic expiration)
 ```
 
 ## Known Issues
@@ -237,7 +234,7 @@ const response = await fetch('/api/cache/bulk', {
      2. Scan result kaydedilir
      3. Build targets kaydedilir
      4. EN SON `lastScannedAt` update edilir
-   - **Etki**: Artık cache kontrolü güvenilir çalışıyor
+   - **Etki**: Artık cache kontrolü güvenilir çalışıyor (persistent cache ile existence check)
 
 2. **Double-Click Scan Başlatma (Çözüldü - 01.10.2025)** ✅
    - **Sorun**: Kullanıcı scan butonuna hızlıca iki kez tıklarsa iki scan başlıyordu

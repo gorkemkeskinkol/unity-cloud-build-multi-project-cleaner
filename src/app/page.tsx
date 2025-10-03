@@ -296,8 +296,7 @@ function Dashboard({ config }: { config: AppConfig }) {
         body: JSON.stringify({
           credentials: config,
           limitProjects: limitProjects,
-          limitTargets: config.limitTargets,
-          cacheMaxAgeMs: 3600000
+          limitTargets: config.limitTargets
         })
       });
 

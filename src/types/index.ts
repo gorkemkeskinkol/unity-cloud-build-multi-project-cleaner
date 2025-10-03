@@ -79,7 +79,6 @@ export interface ScanOptions {
   limitProjects?: number;
   limitTargets?: number;
   parallelRequests?: number;
-  cacheMaxAgeMs?: number; // Cache geçerlilik süresi (milisaniye)
 }
 
 export interface ScanProgress {

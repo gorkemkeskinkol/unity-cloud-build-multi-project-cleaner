@@ -85,7 +85,6 @@ export class ScanOrchestrator {
       });
 
       const db = DatabaseService.getInstance();
-      const cacheMaxAgeMs = options.cacheMaxAgeMs || 3600000; // Default 1 saat
       
       // Organization'ı database'e kaydet
       await db.upsertOrganization(credentials.orgId);
@@ -119,7 +118,7 @@ export class ScanOrchestrator {
 
         try {
           // Cache kontrolü yap
-          const isCached = await db.isProjectCached(projectId, cacheMaxAgeMs);
+          const isCached = await db.isProjectCached(projectId);
           
           if (isCached) {
             // Cache'den veri çek

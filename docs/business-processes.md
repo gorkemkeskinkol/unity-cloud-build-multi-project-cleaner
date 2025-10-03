@@ -25,6 +25,55 @@ CredentialManager.getCredentials()
 ```
 
 ### Kritik Noktalar
+- Cache TTL (Time To Live): Default 1 saat (cacheMaxAgeMs parametresi ile ayarlanabilir)
+- Cache kontrolü her scan'de proje bazında yapılır
+- Cache temizleme işlemi cascade delete ile ilgili tüm verileri siler
+- Cache'den gelen projeler status'ünde görsel olarak işaretlenir
+- Bulk cache clearing birden fazla projeyi tek transactionda temizler
+- Cache miss durumunda otomatik API fallback
+
+---
+
+## 8. Project Table Sorting
+
+### Veri Akışı
+```
+User clicks "Total Builds" header (Dashboard UI - src/app/page.tsx)
+    ↓
+handleSortToggle('totalBuilds') function called
+    ↓
+setSortOptions() updates state (toggle asc/desc)
+    ↓
+useEffect with dependency [sortOptions] in Dashboard triggers
+    ↓
+cachedProjects state updated with sorted array
+    ↓
+Table re-renders with projects ordered by totalBuilds
+
+Data reload scenarios (scan complete, cache clear):
+    ↓
+fetch('/api/cache/projects') returns raw data
+    ↓
+Array copied and sorted client-side using current sortOptions
+    ↓
+setCachedProjects with sorted data
+    ↓
+Table displays in sorted order
+
+Sort Logic:
+- Primary: totalBuilds (numeric, null=0)
+- Secondary: name (alphabetical for ties)
+- Default: desc (highest build count first)
+```
+
+### Kritik Noktalar
+- Client-side sorting for performance (small n, O(n log n) negligible)
+- Sorting applied on every data reload (initial mount, scan complete, cache ops)
+- UI indicator: ↓ for descending, ↑ for ascending
+- No server-side changes or API params needed
+- Handles missing totalBuilds as 0
+- Locale-sensitive name comparison (Turkish locale)
+- Sorting preserved across interactions without extra fetches
 - Local storage kontrolü uygulama her açılışında yapılır
 - API key validasyonu gerçek Unity API çağrısı ile test edilir
 - Hatalı credentials durumunda kullanıcı SetupWizard'a geri döner

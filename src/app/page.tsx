@@ -5,6 +5,11 @@ import { CredentialManager } from '@/modules/config/credential-manager';
 import { LogProvider, useLog } from '@/contexts/LogContext';
 import { AppConfig } from '@/types';
 
+interface SortOptions {
+  field: 'totalBuilds';
+  direction: 'asc' | 'desc';
+}
+
 // Setup Wizard Component
 function SetupWizard({ onComplete }: { onComplete: (config: AppConfig) => void }) {
   const [orgId, setOrgId] = useState('');
@@ -219,6 +224,7 @@ function Dashboard({ config }: { config: AppConfig }) {
   const [isDeletingBuilds, setIsDeletingBuilds] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ projectId: string; projectName: string } | null>(null);
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+  const [sortOptions, setSortOptions] = useState<SortOptions>({ field: 'totalBuilds', direction: 'desc' });
   const { addLog } = useLog();
 
   // Load cached projects on mount
@@ -228,7 +234,18 @@ function Dashboard({ config }: { config: AppConfig }) {
         setIsLoadingCache(true);
         const response = await fetch('/api/cache/projects');
         if (response.ok) {
-          const projects = await response.json();
+          let projects = await response.json();
+
+          // Apply sorting
+          projects = [...projects].sort((a, b) => {
+            const aVal = a.totalBuilds || 0;
+            const bVal = b.totalBuilds || 0;
+            if (aVal !== bVal) {
+              return sortOptions.direction === 'desc' ? bVal - aVal : aVal - bVal;
+            }
+            return (a.name || '').localeCompare(b.name || '');
+          });
+
           setCachedProjects(projects);
         }
       } catch (error) {
@@ -239,7 +256,7 @@ function Dashboard({ config }: { config: AppConfig }) {
     };
 
     loadCachedProjects();
-  }, []);
+  }, [sortOptions]);
 
   // Reload cached projects after successful scan
   useEffect(() => {
@@ -248,7 +265,18 @@ function Dashboard({ config }: { config: AppConfig }) {
         try {
           const response = await fetch('/api/cache/projects');
           if (response.ok) {
-            const projects = await response.json();
+            let projects = await response.json();
+
+            // Apply sorting
+            projects = [...projects].sort((a, b) => {
+              const aVal = a.totalBuilds || 0;
+              const bVal = b.totalBuilds || 0;
+              if (aVal !== bVal) {
+                return sortOptions.direction === 'desc' ? bVal - aVal : aVal - bVal;
+              }
+              return (a.name || '').localeCompare(b.name || '');
+            });
+
             setCachedProjects(projects);
           }
         } catch (error) {
@@ -436,7 +464,18 @@ function Dashboard({ config }: { config: AppConfig }) {
       // Reload cached projects
       const reloadResponse = await fetch('/api/cache/projects');
       if (reloadResponse.ok) {
-        const projects = await reloadResponse.json();
+        let projects = await reloadResponse.json();
+
+        // Apply sorting
+        projects = [...projects].sort((a, b) => {
+          const aVal = a.totalBuilds || 0;
+          const bVal = b.totalBuilds || 0;
+          if (aVal !== bVal) {
+            return sortOptions.direction === 'desc' ? bVal - aVal : aVal - bVal;
+          }
+          return (a.name || '').localeCompare(b.name || '');
+        });
+
         setCachedProjects(projects);
       }
       
@@ -447,6 +486,13 @@ function Dashboard({ config }: { config: AppConfig }) {
     } finally {
       setIsClearingCache(false);
     }
+  };
+
+  const handleSortToggle = (field: 'totalBuilds') => {
+    setSortOptions(prev => ({
+      field,
+      direction: prev.field === field && prev.direction === 'desc' ? 'asc' : 'desc'
+    }));
   };
 
   // Clear multiple projects cache
@@ -794,7 +840,24 @@ function Dashboard({ config }: { config: AppConfig }) {
                     </th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Project Name</th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Platforms</th>
-                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Total Builds</th>
+                    <th 
+                      style={{ 
+                        padding: '12px', 
+                        textAlign: 'left', 
+                        border: '1px solid #ddd',
+                        cursor: 'pointer',
+                        userSelect: 'none'
+                      }} 
+                      onClick={() => handleSortToggle('totalBuilds')}
+                      title="Click to sort by Total Builds"
+                    >
+                      Total Builds
+                      {sortOptions.field === 'totalBuilds' && (
+                        <span style={{ marginLeft: '5px', fontSize: '12px' }}>
+                          {sortOptions.direction === 'desc' ? '↓' : '↑'}
+                        </span>
+                      )}
+                    </th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Last Scanned</th>
                     <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Status</th>
                     <th style={{ padding: '12px', textAlign: 'center', border: '1px solid #ddd', width: '60px' }}>Actions</th>

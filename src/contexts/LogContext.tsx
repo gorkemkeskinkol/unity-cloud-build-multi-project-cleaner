@@ -1,13 +1,17 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useCallback } from 'react';
+import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react';
 import { LogEntry, LogLevel } from '@/types';
+
+/** Bellekte tutulan en fazla log sayısı (eskiler düşer) */
+const MAX_LOGS = 1000;
 
 interface LogContextType {
   logs: LogEntry[];
-  addLog: (level: LogLevel, message: string, details?: string, source?: string) => void;
+  /** source: hangi modül ("Jobs", "ScanOrchestrator"...), details: isteğe bağlı ek satır */
+  addLog: (level: LogLevel, message: string, source?: string, details?: string) => void;
   clearLogs: () => void;
-  getLogsByLevel: (level: LogLevel) => LogEntry[];
+  counts: Record<LogLevel, number>;
   hasErrors: boolean;
 }
 
@@ -24,8 +28,8 @@ const LogContext = createContext<LogContextType | undefined>(undefined);
 
 function logReducer(state: LogState, action: LogAction): LogState {
   switch (action.type) {
-    case 'ADD_LOG':
-      const newLog: LogEntry = {
+    case 'ADD_LOG': {
+      const entry: LogEntry = {
         id: state.nextId,
         level: action.payload.level,
         message: action.payload.message,
@@ -33,76 +37,45 @@ function logReducer(state: LogState, action: LogAction): LogState {
         timestamp: new Date(),
         source: action.payload.source
       };
-
-      return {
-        logs: [newLog, ...state.logs],
-        nextId: state.nextId + 1
-      };
-
+      const logs = [entry, ...state.logs];
+      if (logs.length > MAX_LOGS) logs.length = MAX_LOGS;
+      return { logs, nextId: state.nextId + 1 };
+    }
     case 'CLEAR_LOGS':
-      return {
-        logs: [],
-        nextId: 1
-      };
-
+      return { logs: [], nextId: 1 };
     default:
       return state;
   }
 }
 
-interface LogProviderProps {
-  children: React.ReactNode;
-}
+export function LogProvider({ children }: { children: React.ReactNode }) {
+  const [state, dispatch] = useReducer(logReducer, { logs: [], nextId: 1 });
 
-export function LogProvider({ children }: LogProviderProps) {
-  const [state, dispatch] = useReducer(logReducer, {
-    logs: [],
-    nextId: 1
-  });
-
-  const addLog = useCallback((
-    level: LogLevel,
-    message: string,
-    details?: string,
-    source?: string
-  ) => {
-    dispatch({
-      type: 'ADD_LOG',
-      payload: { level, message, details, source }
-    });
-
-    // Console'a da log'u yazdır (development için)
+  const addLog = useCallback((level: LogLevel, message: string, source?: string, details?: string) => {
+    dispatch({ type: 'ADD_LOG', payload: { level, message, details, source } });
     if (process.env.NODE_ENV === 'development') {
-      const logMethod = level === 'error' ? 'error' : 
-                      level === 'warning' ? 'warn' : 
-                      'log';
-      console[logMethod](`[${source || 'APP'}] ${message}`, details || '');
+      const method = level === 'error' ? 'error' : level === 'warning' ? 'warn' : 'log';
+      console[method](`[${source || 'APP'}] ${message}`, details || '');
     }
   }, []);
 
-  const clearLogs = useCallback(() => {
-    dispatch({ type: 'CLEAR_LOGS' });
-  }, []);
+  const clearLogs = useCallback(() => dispatch({ type: 'CLEAR_LOGS' }), []);
 
-  const getLogsByLevel = useCallback((level: LogLevel) => {
-    return state.logs.filter(log => log.level === level);
+  const counts = useMemo(() => {
+    const c: Record<LogLevel, number> = { info: 0, warning: 0, error: 0, success: 0 };
+    for (const log of state.logs) c[log.level]++;
+    return c;
   }, [state.logs]);
 
-  const hasErrors = state.logs.some(log => log.level === 'error');
-
-  const contextValue: LogContextType = {
+  const value: LogContextType = {
     logs: state.logs,
     addLog,
     clearLogs,
-    getLogsByLevel,
-    hasErrors
+    counts,
+    hasErrors: counts.error > 0
   };
 
-  return (
-    <LogContext.Provider value={contextValue}>
-      {children}
-    </LogContext.Provider>
-  );
+  return <LogContext.Provider value={value}>{children}</LogContext.Provider>;
 }
 
 export function useLog() {
@@ -111,33 +84,4 @@ export function useLog() {
     throw new Error('useLog must be used within a LogProvider');
   }
   return context;
-}
-
-// Convenience hooks for specific log levels
-export function useLogInfo() {
-  const { addLog } = useLog();
-  return useCallback((message: string, details?: string, source?: string) => {
-    addLog('info', message, details, source);
-  }, [addLog]);
-}
-
-export function useLogWarning() {
-  const { addLog } = useLog();
-  return useCallback((message: string, details?: string, source?: string) => {
-    addLog('warning', message, details, source);
-  }, [addLog]);
-}
-
-export function useLogError() {
-  const { addLog } = useLog();
-  return useCallback((message: string, details?: string, source?: string) => {
-    addLog('error', message, details, source);
-  }, [addLog]);
-}
-
-export function useLogSuccess() {
-  const { addLog } = useLog();
-  return useCallback((message: string, details?: string, source?: string) => {
-    addLog('success', message, details, source);
-  }, [addLog]);
 }

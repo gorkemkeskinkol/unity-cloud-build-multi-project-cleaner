@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Badge, Button, Card, Group, Indicator, Progress, Stack, Text, Title, Tooltip } from '@mantine/core';
+import { IconPlayerStop, IconRotateClockwise } from '@tabler/icons-react';
 import { JobRecord, isActive, isResumable } from '@/types/jobs';
 
 interface Props {
@@ -11,13 +13,13 @@ interface Props {
   onResume: (jobId: string) => void;
 }
 
-const STATUS_STYLE: Record<JobRecord['status'], { bg: string; fg: string; label: string }> = {
-  queued:      { bg: '#e2e3e5', fg: '#383d41', label: 'Sırada' },
-  running:     { bg: '#cce5ff', fg: '#004085', label: 'Çalışıyor' },
-  interrupted: { bg: '#fff3cd', fg: '#856404', label: 'Yarım kaldı' },
-  completed:   { bg: '#d4edda', fg: '#155724', label: 'Tamamlandı' },
-  failed:      { bg: '#f8d7da', fg: '#721c24', label: 'Hata' },
-  cancelled:   { bg: '#e2e3e5', fg: '#383d41', label: 'İptal' }
+const STATUS: Record<JobRecord['status'], { color: string; label: string }> = {
+  queued:      { color: 'gray',   label: 'Sırada' },
+  running:     { color: 'blue',   label: 'Çalışıyor' },
+  interrupted: { color: 'yellow', label: 'Yarım kaldı' },
+  completed:   { color: 'green',  label: 'Tamamlandı' },
+  failed:      { color: 'red',    label: 'Hata' },
+  cancelled:   { color: 'gray',   label: 'İptal' }
 };
 
 function formatTime(iso: string | null): string {
@@ -25,117 +27,125 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
-function elapsed(job: JobRecord): string {
-  const start = job.startedAt ? new Date(job.startedAt).getTime() : null;
-  if (!start) return '';
-  const end = job.finishedAt ? new Date(job.finishedAt).getTime() : Date.now();
-  const seconds = Math.max(0, Math.round((end - start) / 1000));
-  if (seconds < 60) return `${seconds} sn`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} dk ${seconds % 60} sn`;
-  return `${Math.floor(minutes / 60)} sa ${minutes % 60} dk`;
+function elapsed(job: JobRecord, now: number): string {
+  if (!job.startedAt) return '';
+  const start = new Date(job.startedAt).getTime();
+  const end = job.finishedAt ? new Date(job.finishedAt).getTime() : now;
+  const s = Math.max(0, Math.round((end - start) / 1000));
+  if (s < 60) return `${s} sn`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} dk ${s % 60} sn`;
+  return `${Math.floor(m / 60)} sa ${m % 60} dk`;
 }
 
-/** Bekleme bitişine geri sayım */
-function Countdown({ until }: { until: string }) {
-  const [, tick] = useState(0);
+function remaining(until: string, now: number): string | null {
+  const r = Math.max(0, Math.round((new Date(until).getTime() - now) / 1000));
+  if (r === 0) return null;
+  return r >= 120 ? `${Math.ceil(r / 60)} dk` : `${r} sn`;
+}
+
+/** Saniyede bir yeniden çizim: geçen süre ve geri sayım için */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => tick(t => t + 1), 1000);
+    if (!active) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
-  const remaining = Math.max(0, Math.round((new Date(until).getTime() - Date.now()) / 1000));
-  if (remaining === 0) return null;
-  return <span style={{ color: '#856404' }}> · {remaining >= 120 ? `${Math.ceil(remaining / 60)} dk` : `${remaining} sn`} kaldı</span>;
+  }, [active]);
+  return now;
+}
+
+function JobCard({ job, now, onCancel, onResume }: { job: JobRecord; now: number; onCancel: Props['onCancel']; onResume: Props['onResume'] }) {
+  const status = STATUS[job.status];
+  const p = job.progress;
+  const active = isActive(job);
+  const pct = p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+  const countdown = active && p?.waitingUntil ? remaining(p.waitingUntil, now) : null;
+  const barColor = job.status === 'failed' ? 'red' : (p?.failed ?? 0) > 0 ? 'yellow' : job.status === 'completed' ? 'green' : 'blue';
+
+  return (
+    <Card p="sm">
+      <Stack gap={6}>
+        <Group justify="space-between" wrap="nowrap">
+          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+            <Badge color={status.color} variant={active ? 'filled' : 'light'} style={{ flexShrink: 0 }}>{status.label}</Badge>
+            <Text fw={600} truncate>{job.title}</Text>
+            <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+              {formatTime(job.createdAt)}{job.startedAt ? ` · ${elapsed(job, now)}` : ''}
+            </Text>
+          </Group>
+          <Group gap={6} wrap="nowrap">
+            {active && (
+              <Button size="compact-xs" color="red" variant="light" leftSection={<IconPlayerStop size={12} />} onClick={() => onCancel(job.id)}>
+                İptal
+              </Button>
+            )}
+            {isResumable(job) && (
+              <Button size="compact-xs" variant="light" leftSection={<IconRotateClockwise size={12} />} onClick={() => onResume(job.id)}>
+                {job.status === 'completed' ? 'Eksikleri tekrar dene' : 'Devam et'}
+              </Button>
+            )}
+          </Group>
+        </Group>
+
+        {p && p.total > 0 && (
+          <>
+            <Progress value={pct} color={barColor} size="sm" animated={active} />
+            <Group justify="space-between" gap="xs">
+              <Text size="xs" c="dimmed">
+                {p.done}/{p.total} tamamlandı{p.failed > 0 ? `, ${p.failed} eksik` : ''}
+                {p.pass && p.pass > 1 ? ` · geçiş ${p.pass}/${p.maxPasses}` : ''}
+              </Text>
+              <Text size="xs" c={countdown ? 'yellow' : 'dimmed'} ta="right">
+                {p.phase}{p.currentName && active ? `: ${p.currentName}` : ''}{countdown ? ` · ${countdown} kaldı` : ''}
+              </Text>
+            </Group>
+          </>
+        )}
+        {p && p.total === 0 && active && (
+          <Text size="xs" c={countdown ? 'yellow' : 'dimmed'}>
+            {p.phase}{countdown ? ` · ${countdown} kaldı` : ''}
+          </Text>
+        )}
+        {job.error && <Text size="xs" c="red">{job.error}</Text>}
+      </Stack>
+    </Card>
+  );
 }
 
 export function JobsPanel({ jobs, isLoading, isConnected, onCancel, onResume }: Props) {
   const [showAll, setShowAll] = useState(false);
-  const visible = showAll ? jobs : jobs.filter((j, i) => isActive(j) || j.status === 'interrupted' || i < 5);
+  const anyActive = jobs.some(isActive);
+  const now = useNow(anyActive);
+  const visible = showAll ? jobs : jobs.filter((j, i) => isActive(j) || j.status === 'interrupted' || i < 4);
 
   return (
-    <div style={{ backgroundColor: '#f8f9fa', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-        <h3 style={{ margin: 0 }}>
-          Jobs
-          <span style={{ marginLeft: '10px', fontSize: '12px', color: isConnected ? '#28a745' : '#dc3545' }}>
-            ● {isConnected ? 'canlı' : 'bağlantı yok, yeniden bağlanıyor'}
-          </span>
-        </h3>
-        {jobs.length > visible.length || showAll ? (
-          <button onClick={() => setShowAll(s => !s)} style={{ padding: '4px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '3px', cursor: 'pointer', background: 'white' }}>
-            {showAll ? 'Sadece son işler' : `Tümünü göster (${jobs.length})`}
-          </button>
-        ) : null}
-      </div>
+    <Stack gap="xs">
+      <Group justify="space-between">
+        <Group gap="sm">
+          <Title order={5}>İşler</Title>
+          <Tooltip label={isConnected ? 'Canlı güncelleme bağlı' : 'Bağlantı koptu, yeniden bağlanıyor'}>
+            <Indicator color={isConnected ? 'green' : 'red'} processing={!isConnected} size={8} position="middle-start" offset={-6}>
+              <Text size="xs" c="dimmed" ml={8}>{isConnected ? 'canlı' : 'bağlantı yok'}</Text>
+            </Indicator>
+          </Tooltip>
+        </Group>
+        {(jobs.length > visible.length || showAll) && (
+          <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setShowAll(s => !s)}>
+            {showAll ? 'Daha az göster' : `Tümünü göster (${jobs.length})`}
+          </Button>
+        )}
+      </Group>
 
       {isLoading ? (
-        <p style={{ color: '#666', margin: 0 }}>Yükleniyor...</p>
+        <Text size="sm" c="dimmed">Yükleniyor...</Text>
       ) : visible.length === 0 ? (
-        <p style={{ color: '#666', margin: 0, fontStyle: 'italic' }}>Henüz iş yok. &quot;Start Full Scan&quot; ile başlayın; işler servis kapanıp açılsa da kaldığı yerden devam eder.</p>
+        <Text size="sm" c="dimmed" fs="italic">
+          Henüz iş yok. İşler servis kapanıp açılsa da kaldığı yerden devam eder.
+        </Text>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {visible.map(job => {
-            const style = STATUS_STYLE[job.status];
-            const p = job.progress;
-            const pct = p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-            const waiting = p?.waitingUntil && isActive(job);
-            return (
-              <div key={job.id} style={{ backgroundColor: 'white', border: '1px solid #ddd', borderRadius: '4px', padding: '10px 12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                    <span style={{ padding: '2px 8px', borderRadius: '3px', fontSize: '12px', fontWeight: 'bold', backgroundColor: style.bg, color: style.fg, whiteSpace: 'nowrap' }}>
-                      {style.label}
-                    </span>
-                    <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.title}</strong>
-                    <span style={{ fontSize: '12px', color: '#666', whiteSpace: 'nowrap' }}>
-                      {formatTime(job.createdAt)}{elapsed(job) ? ` · ${elapsed(job)}` : ''}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    {isActive(job) && (
-                      <button onClick={() => onCancel(job.id)} style={{ padding: '4px 10px', fontSize: '12px', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>
-                        İptal
-                      </button>
-                    )}
-                    {isResumable(job) && (
-                      <button onClick={() => onResume(job.id)} style={{ padding: '4px 10px', fontSize: '12px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>
-                        {job.status === 'completed' ? 'Eksikleri tekrar dene' : 'Kaldığı yerden devam'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {p && p.total > 0 && (
-                  <div style={{ marginTop: '8px' }}>
-                    <div style={{ height: '8px', backgroundColor: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ width: `${pct}%`, height: '100%', backgroundColor: job.status === 'failed' ? '#dc3545' : p.failed > 0 ? '#ffc107' : '#28a745', transition: 'width 0.3s' }} />
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#555', marginTop: '4px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
-                      <span>
-                        {p.done}/{p.total} tamamlandı{p.failed > 0 ? `, ${p.failed} eksik` : ''}
-                        {p.pass && p.pass > 1 ? ` · geçiş ${p.pass}/${p.maxPasses}` : ''}
-                      </span>
-                      <span>
-                        {p.phase}{p.currentName && isActive(job) ? `: ${p.currentName}` : ''}
-                        {waiting ? <Countdown until={p.waitingUntil!} /> : null}
-                      </span>
-                    </div>
-                  </div>
-                )}
-                {p && p.total === 0 && isActive(job) && (
-                  <div style={{ fontSize: '12px', color: '#555', marginTop: '6px' }}>
-                    {p.phase}{waiting ? <Countdown until={p.waitingUntil!} /> : null}
-                  </div>
-                )}
-
-                {job.error && (
-                  <div style={{ fontSize: '12px', color: '#721c24', marginTop: '6px' }}>{job.error}</div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        visible.map(job => <JobCard key={job.id} job={job} now={now} onCancel={onCancel} onResume={onResume} />)
       )}
-    </div>
+    </Stack>
   );
 }

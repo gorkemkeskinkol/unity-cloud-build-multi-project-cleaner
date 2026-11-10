@@ -149,7 +149,8 @@ const isValid = CredentialManager.hasValidCredentials();
 
 Unity Cloud Build API, kısa sürede çok istek gelince `403` + "abuse detection" mesajıyla geçici blok uygular. Tarama bunu şöyle yönetir:
 
-- İstekler arası en az 400 ms beklenir (`UNITY_API_MIN_INTERVAL_MS` ile ayarlanabilir)
+- Unity'nin belgelenmiş limiti **100 istek/dakika**; biz varsayılan **60/dk** ile çok altında kalırız (`UNITY_API_MAX_PER_MINUTE`), istekler arası en az 1 sn (`UNITY_API_MIN_INTERVAL_MS`)
+- `X-RateLimit-Remaining` 10'un altına inince `X-RateLimit-Reset`'e kadar beklenir; 429'daki "retry in N seconds" ve `Retry-After` birebir uygulanır
 - Blok alındığında 1 dk'dan başlayıp 15 dk'ya çıkan beklemelerle aynı istek tekrar denenir; bu sırada başka istek atılmaz (scan ve artifact silme ortak pencereyi paylaşır)
 - Artifact silmede de beklemeler logda gösterilir; limit tükenirse işlem durur, target atlanmaz
 

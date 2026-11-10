@@ -278,14 +278,17 @@ NotificationService.showError(user-friendly message)
 
 ### Rate Limiting Mekanizması (ApiClient.request)
 ```
-Her istek önce throttle'dan geçer
-    ├─ İki istek arası en az UNITY_API_MIN_INTERVAL_MS (varsayılan 400 ms)
-    └─ Daha önce rate limit alındıysa blockedUntil dolana kadar hiçbir istek atılmaz
-       (throttle ve blok durumu static: scan + artifact silme aynı anda sürse de tek pencere)
+Her istek önce throttle'dan geçer (hepsi static: scan + artifact silme tek pencere)
+    ├─ Daha önce rate limit alındıysa blockedUntil dolana kadar hiçbir istek atılmaz
+    ├─ İki istek arası en az UNITY_API_MIN_INTERVAL_MS (varsayılan 1000 ms)
+    ├─ Kayan 60 sn penceresinde en fazla UNITY_API_MAX_PER_MINUTE istek (varsayılan 60;
+    │   Unity'nin belgelenmiş limiti 100/dk, bilerek altında)
+    └─ X-RateLimit-Remaining ≤ 10 ise X-RateLimit-Reset'e kadar beklenir
     ↓
 Yanıt sınıflandırılır (ApiError.kind)
     ├─ rate_limit  → HTTP 429, veya gövdesinde "abuse detection / temporarily blocked" geçen HTTP 403
-    │     Retry-After header'ı varsa o kadar; yoksa 1 → 2 → 5 → 10 → 15 dk (max 10 deneme)
+    │     Sunucu süre söylüyorsa (Retry-After, "retry in N seconds", X-RateLimit-Reset) o kadar + 2 sn;
+    │     söylemiyorsa (abuse 403 söylemiyor) 1 → 2 → 5 → 10 → 15 dk (max 10 deneme)
     │     Bekleme boyunca diğer tüm istekler de bekler (blockedUntil, tüm ApiClient instance'ları ortak)
     ├─ server / network → 5xx, timeout, fetch hatası: 3s → 6s → 12s → 24s (max 5 deneme)
     ├─ forbidden   → abuse mesajı olmayan düz 403: 5s, 2 deneme (gerçek yetki hatası olabilir)
@@ -317,6 +320,8 @@ Scan sonu
 - 403'ün **gövdesine** bakılır: abuse detection mesajı rate limit sayılır, diğer 403'ler yetki hatası
 - Scan artık `/orgs/{org}/builds` sanity check'i yapmaz (org'daki tüm build'leri listeleyen en ağır istek); auth kontrolü proje listesiyle olur
 - Rate limit beklemeleri saniyelik değil **dakikalık**; Unity'nin bloğu bitmeden tekrar istek atmak bloğu uzatır
+- Gözlem (10 Kas 2026): belgelerdeki 429 hiç görülmedi; ~130 istek/dk hızında 59 proje sonra doğrudan abuse 403 geldi,
+  eski kodun 2-4 sn'lik retry'ları banı saatlerce uzattı. Bu yüzden asıl savunma limiti hiç aşmamak
 - Rate limit 12 denemede de geçmezse veya API key geçersizse (401) scan **tamamen durur**; proje atlanmaz
 - Tek bir target'ta kalıcı hata (404 vb.) projeyi `partial` yapar, scan sürer
 - Yarım kalan projeler cache'e alınmaz; hem aynı scan içindeki sonraki geçişlerde hem de bir sonraki scan'de otomatik yeniden denenir

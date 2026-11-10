@@ -5,8 +5,21 @@ const NEXTJS_API_BASE = '/api/unity';
 // Server-side için direkt Unity API
 const UNITY_API_BASE = 'https://build-api.cloud.unity3d.com/api/v1';
 
-/** İstekler arası minimum bekleme (ms). Unity abuse detection'ı tetiklememek için. */
-const DEFAULT_MIN_INTERVAL_MS = Number(process.env.UNITY_API_MIN_INTERVAL_MS) || 400;
+/**
+ * Unity Build Automation API'nin belgelenmiş limiti 100 istek/dakika
+ * (https://build-api.cloud.unity3d.com/docs/). Limit aşımında belgelere göre 429
+ * dönmesi gerekir; pratikte ise doğrudan "abuse detection" 403'ü ile uzun süreli
+ * (10+ dk) geçici ban geliyor ve ban süresince atılan her istek banı uzatıyor.
+ * Bu yüzden limitin çok altında kalırız: varsayılan 60 istek/dk, üç katmanlı koruma:
+ *   1) istekler arası minimum aralık,
+ *   2) kayan 60 sn penceresinde istek bütçesi,
+ *   3) X-RateLimit-Remaining düşünce X-RateLimit-Reset'e kadar bekleme.
+ */
+const DEFAULT_MAX_REQUESTS_PER_MINUTE = Number(process.env.UNITY_API_MAX_PER_MINUTE) || 60;
+/** İstekler arası minimum bekleme (ms) */
+const DEFAULT_MIN_INTERVAL_MS = Number(process.env.UNITY_API_MIN_INTERVAL_MS) || 1_000;
+/** X-RateLimit-Remaining bu değerin altına inince reset'e kadar beklenir */
+const RATE_LIMIT_HEADER_RESERVE = 10;
 /** Tek istek için zaman aşımı */
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -69,6 +82,11 @@ export class ApiClient {
    */
   private static lastRequestAt = 0;
   private static blockedUntil = 0;
+  /** Son 60 sn içinde atılan isteklerin zaman damgaları (kayan pencere bütçesi) */
+  private static requestTimestamps: number[] = [];
+  /** Sunucunun bildirdiği son limit bilgisi */
+  private static serverLimit: { limit: number | null; remaining: number | null; resetAt: number | null } = { limit: null, remaining: null, resetAt: null };
+  private static headersLogged = false;
 
   constructor(orgId: string, apiKey: string, options: ApiClientOptions = {}) {
     this.orgId = orgId;
@@ -91,6 +109,24 @@ export class ApiClient {
   /** Şu an rate limit bloğu sürüyorsa kalan süre (ms), yoksa 0 */
   static remainingBlockMs(): number {
     return Math.max(0, ApiClient.blockedUntil - Date.now());
+  }
+
+  /** Teşhis: bizim son 60 sn istek sayımız + sunucunun bildirdiği limit */
+  static getRateState(): { requestsLastMinute: number; maxPerMinute: number; server: typeof ApiClient.serverLimit; blockedMs: number } {
+    ApiClient.pruneTimestamps();
+    return {
+      requestsLastMinute: ApiClient.requestTimestamps.length,
+      maxPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+      server: { ...ApiClient.serverLimit },
+      blockedMs: ApiClient.remainingBlockMs()
+    };
+  }
+
+  private static pruneTimestamps(): void {
+    const cutoff = Date.now() - 60_000;
+    while (ApiClient.requestTimestamps.length > 0 && ApiClient.requestTimestamps[0] < cutoff) {
+      ApiClient.requestTimestamps.shift();
+    }
   }
 
   async get(endpoint: string, params?: Record<string, string | number>): Promise<Response> {
@@ -125,11 +161,13 @@ export class ApiClient {
       let response: Response;
       try {
         ApiClient.lastRequestAt = Date.now();
+        ApiClient.requestTimestamps.push(ApiClient.lastRequestAt);
         response = await fetch(url.toString(), {
           method,
           headers: this.headers,
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
         });
+        this.recordRateLimitHeaders(response, endpoint);
       } catch (error) {
         // Ağ hatası veya timeout
         transientAttempt++;
@@ -162,9 +200,14 @@ export class ApiClient {
         case 'rate_limit': {
           rateLimitAttempt++;
           if (rateLimitAttempt >= RATE_LIMIT_MAX_ATTEMPTS) throw apiError;
-          const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'));
+          // Sunucu süre söylüyorsa ona uy (+2 sn pay): Retry-After header'ı, gövdedeki
+          // "retry in N seconds" ya da X-RateLimit-Reset. Söylemiyorsa uzun plan.
+          const serverSaysMs =
+            parseRetryAfter(response.headers.get('Retry-After')) ??
+            parseRetryInSeconds(errorText) ??
+            (response.status === 429 && ApiClient.serverLimit.resetAt ? Math.max(0, ApiClient.serverLimit.resetAt - Date.now()) : null);
           const scheduled = RATE_LIMIT_WAIT_SCHEDULE_MS[Math.min(rateLimitAttempt - 1, RATE_LIMIT_WAIT_SCHEDULE_MS.length - 1)];
-          const waitMs = retryAfterMs ?? scheduled;
+          const waitMs = serverSaysMs !== null ? serverSaysMs + 2_000 : scheduled;
           // Diğer tüm istekler (başka instance'lar dahil) bu süre boyunca beklesin
           ApiClient.blockedUntil = Date.now() + waitMs;
           await this.backoff('rate_limit', response.status, endpoint, waitMs, rateLimitAttempt, RATE_LIMIT_MAX_ATTEMPTS);
@@ -189,16 +232,59 @@ export class ApiClient {
     }
   }
 
-  /** Throttle ve global rate limit bloğunu bekler */
+  /**
+   * İstek atmadan önce sırayla bekler:
+   *  - aktif rate limit bloğu (blockedUntil),
+   *  - istekler arası minimum aralık,
+   *  - kayan 60 sn penceresindeki istek bütçesi,
+   *  - sunucunun bildirdiği kalan hak azaldıysa reset zamanı.
+   */
   private async waitForTurn(): Promise<void> {
     // Döngü: bekleme sırasında başka bir instance bloğu uzatmış olabilir
     for (;;) {
       const now = Date.now();
+      ApiClient.pruneTimestamps();
+
       const untilBlockEnds = ApiClient.blockedUntil - now;
       const untilInterval = ApiClient.lastRequestAt + this.minIntervalMs - now;
-      const waitMs = Math.max(untilBlockEnds, untilInterval, 0);
+
+      let untilBudget = 0;
+      if (ApiClient.requestTimestamps.length >= DEFAULT_MAX_REQUESTS_PER_MINUTE) {
+        // En eski istek pencereden çıkınca yer açılır
+        untilBudget = ApiClient.requestTimestamps[0] + 60_000 - now + 50;
+      }
+
+      let untilServerReset = 0;
+      const { remaining, resetAt } = ApiClient.serverLimit;
+      if (remaining !== null && remaining <= RATE_LIMIT_HEADER_RESERVE && resetAt !== null && resetAt > now) {
+        untilServerReset = resetAt - now + 1_000;
+      }
+
+      const waitMs = Math.max(untilBlockEnds, untilInterval, untilBudget, untilServerReset, 0);
       if (waitMs <= 0) return;
+      if (untilBudget === waitMs || untilServerReset === waitMs) {
+        console.warn(`[API THROTTLE] ${untilServerReset === waitMs ? `sunucu kalan hak ${remaining}` : `dakikalık bütçe (${DEFAULT_MAX_REQUESTS_PER_MINUTE}) doldu`} → ${Math.round(waitMs / 1000)}s bekleniyor`);
+      }
       await this.sleep(waitMs);
+    }
+  }
+
+  /** X-RateLimit-* header'larını kaydeder; ilk görüşte ve hak azalınca loglar */
+  private recordRateLimitHeaders(response: Response, endpoint: string): void {
+    const limit = toInt(response.headers.get('X-RateLimit-Limit'));
+    const remaining = toInt(response.headers.get('X-RateLimit-Remaining'));
+    const reset = toInt(response.headers.get('X-RateLimit-Reset'));
+    if (limit === null && remaining === null && reset === null) return;
+
+    // Reset epoch saniye (belgeye göre) ya da ms olabilir; 1e12'den büyükse ms kabul et
+    const resetAt = reset === null ? null : (reset > 1e12 ? reset : reset * 1000);
+    ApiClient.serverLimit = { limit, remaining, resetAt };
+
+    if (!ApiClient.headersLogged) {
+      ApiClient.headersLogged = true;
+      console.log(`[API RATE] Unity limit header'ları: limit=${limit} remaining=${remaining} reset=${resetAt ? new Date(resetAt).toISOString() : null} (${endpoint})`);
+    } else if (remaining !== null && remaining <= RATE_LIMIT_HEADER_RESERVE * 2) {
+      console.warn(`[API RATE] kalan hak ${remaining}/${limit}, reset ${resetAt ? Math.max(0, Math.round((resetAt - Date.now()) / 1000)) : '?'}s sonra`);
     }
   }
 
@@ -324,6 +410,18 @@ function extractMessage(body: string): string | null {
     // JSON değil
   }
   return null;
+}
+
+function toInt(value: string | null): number | null {
+  if (value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Unity 429 gövdesi: "... retry in 42 seconds" */
+function parseRetryInSeconds(body: string): number | null {
+  const match = body.match(/retry (?:your request )?(?:again )?in (\d+) ?s(?:ec(?:ond)?s?)?/i);
+  return match ? Number(match[1]) * 1000 : null;
 }
 
 /** Retry-After: saniye sayısı veya HTTP tarihi */

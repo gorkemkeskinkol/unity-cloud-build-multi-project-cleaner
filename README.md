@@ -37,13 +37,16 @@ A modern web dashboard for managing multiple Unity Cloud Build projects. Built w
 │   ├── module-maps.md        # Detailed module relationships
 │   └── business-processes.md # Data flow and business logic
 ├── src/
-│   ├── app/                  # Next.js app directory
+│   ├── app/                  # Next.js app directory (api/jobs/** job rotaları)
+│   ├── components/           # JobsPanel
+│   ├── hooks/                # useJobs (SSE + otomatik resume)
 │   ├── components/           # React components (planned)
 │   ├── contexts/             # React contexts
 │   │   └── LogContext.tsx    # Global logging state
 │   ├── modules/              # Core business logic
 │   │   ├── api/              # Unity Cloud Build API integration
 │   │   ├── config/           # Configuration management
+│   │   ├── jobs/             # Job store, event bus, runner
 │   │   └── scanning/         # Project scanning logic
 │   └── types/                # TypeScript type definitions
 ├── prisma/
@@ -148,8 +151,16 @@ Unity Cloud Build API, kısa sürede çok istek gelince `403` + "abuse detection
 
 - İstekler arası en az 400 ms beklenir (`UNITY_API_MIN_INTERVAL_MS` ile ayarlanabilir)
 - Blok alındığında 1 dk'dan başlayıp 15 dk'ya çıkan beklemelerle aynı istek tekrar denenir; bu sırada başka istek atılmaz (scan ve artifact silme ortak pencereyi paylaşır)
-- Aynı anda tek scan çalışır; ikincisi reddedilir. "Cancel Scan" ile süren scan iptal edilebilir, sekme kapanınca scan durur
 - Artifact silmede de beklemeler logda gösterilir; limit tükenirse işlem durur, target atlanmaz
+
+## Job Sistemi
+
+Full scan ve artifact silme **job** olarak çalışır (`docs/job-system.md`):
+
+- İşler sıraya alınır ve tek tek çalışır; dashboard'daki **Jobs** panelinde durum, ilerleme çubuğu, aşama ("Rate limit: 5 dk bekleniyor") ve geri sayım görünür
+- Sekmeyi kapatsanız da iş sürer; servis kapanıp açılırsa iş "Yarım kaldı" olur ve dashboard açıldığında **kaldığı yerden** otomatik devam eder (tamamlanmış projeler/target'lar tekrar işlenmez)
+- Eksikli biten full scan için "Eksikleri tekrar dene" yalnızca tamamlanamayan projeleri tarar
+- API key veritabanına yazılmaz; resume için tarayıcıdaki kayıtlı key kullanılır
 - Tamamlanamayan projeler scan sonunda 60 sn soğumadan sonra yeniden denenir (3 geçiş)
 - Yarım kalan projeler cache'e alınmaz; bir sonraki scan'de otomatik olarak tekrar taranır
 - Scan sonunda hâlâ eksik proje varsa dashboard'da kırmızı kutuda listelenir

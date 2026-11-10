@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react';
 import { CredentialManager } from '@/modules/config/credential-manager';
 import { LogProvider, useLog } from '@/contexts/LogContext';
 import { AppConfig } from '@/types';
+import { JobRecord, isActive } from '@/types/jobs';
+import { useJobs } from '@/hooks/useJobs';
+import { JobsPanel } from '@/components/JobsPanel';
 
 interface SortOptions {
   field: 'totalBuilds';
@@ -213,12 +216,10 @@ function LogPanel() {
 
 // Dashboard Component
 function Dashboard({ config }: { config: AppConfig }) {
-  const [isScanning, setIsScanning] = useState(false);
-  const [serverScanActive, setServerScanActive] = useState(false);
-  const [scanResults, setScanResults] = useState<any>(null);
   const [limitProjects, setLimitProjects] = useState<number | undefined>(undefined); // Default boş
   const [cachedProjects, setCachedProjects] = useState<any[]>([]);
   const [isLoadingCache, setIsLoadingCache] = useState(true);
+  const [cacheReloadKey, setCacheReloadKey] = useState(0);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -228,22 +229,20 @@ function Dashboard({ config }: { config: AppConfig }) {
   const [sortOptions, setSortOptions] = useState<SortOptions>({ field: 'totalBuilds', direction: 'desc' });
   const { addLog } = useLog();
 
-  // Sayfa açıldığında sunucuda süren bir scan var mı?
-  useEffect(() => {
-    fetch('/api/scan')
-      .then(r => r.ok ? r.json() : null)
-      .then(status => {
-        if (status?.isScanning) {
-          setIsScanning(true);
-          setServerScanActive(true);
-          addLog('warning', 'Sunucuda devam eden bir scan var (başka bir sekmeden başlatılmış olabilir). İzlemek için o sekmeye dönün veya "Cancel Scan" ile iptal edin.', 'Dashboard');
-        }
-      })
-      .catch(() => { /* durum alınamazsa sessizce geç */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Job sistemi: liste, canlı güncellemeler, otomatik resume. Bir iş bitince cache listesi yenilenir.
+  const { jobs, isLoading: isLoadingJobs, isConnected, createJob, cancelJob, resumeJob } = useJobs(config, () => {
+    setCacheReloadKey(k => k + 1);
+  });
+  const activeScan = jobs.find(j => j.type === 'full_scan' && isActive(j));
+  const isScanning = !!activeScan;
+  const lastScan: JobRecord | undefined = jobs.find(j => j.type === 'full_scan' && j.status === 'completed');
+  const scanResults = lastScan?.result as {
+    totalProjects: number; completedProjects: number; totalBuilds: number; totalTargets: number;
+    cachedProjects: number; freshProjects: number; passes: number;
+    failedProjects: Array<{ projectId: string; projectName: string; status: string; errors: string[] }>;
+  } | undefined;
 
-  // Load cached projects on mount
+  // Load cached projects on mount, when sorting changes, and after a job finishes
   useEffect(() => {
     const loadCachedProjects = async () => {
       try {
@@ -272,36 +271,7 @@ function Dashboard({ config }: { config: AppConfig }) {
     };
 
     loadCachedProjects();
-  }, [sortOptions]);
-
-  // Reload cached projects after successful scan
-  useEffect(() => {
-    if (scanResults && !isScanning) {
-      const reloadCache = async () => {
-        try {
-          const response = await fetch('/api/cache/projects');
-          if (response.ok) {
-            let projects = await response.json();
-
-            // Apply sorting
-            projects = [...projects].sort((a, b) => {
-              const aVal = a.totalBuilds || 0;
-              const bVal = b.totalBuilds || 0;
-              if (aVal !== bVal) {
-                return sortOptions.direction === 'desc' ? bVal - aVal : aVal - bVal;
-              }
-              return (a.name || '').localeCompare(b.name || '');
-            });
-
-            setCachedProjects(projects);
-          }
-        } catch (error) {
-          console.error('Failed to reload cached projects:', error);
-        }
-      };
-      reloadCache();
-    }
-  }, [scanResults, isScanning]);
+  }, [sortOptions, cacheReloadKey]);
 
   // Close dropdown menu when clicking outside
   useEffect(() => {
@@ -320,124 +290,23 @@ function Dashboard({ config }: { config: AppConfig }) {
   }, [openMenuId]);
 
   const startScan = async () => {
-    // Double-click guard
     if (isScanning) {
-      addLog('warning', 'Zaten bir scan işlemi devam ediyor', 'Dashboard');
+      addLog('warning', 'Zaten bir full scan işi sırada veya çalışıyor', 'Dashboard');
       return;
     }
-
-    try {
-      setScanResults(null);
-      setIsScanning(true);
-      addLog('info', 'Scan başlatılıyor (server-side SSE)...', 'Dashboard');
-      
-      // SSE için fetch isteği yap
-      const response = await fetch('/api/scan', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          credentials: config,
-          limitProjects: limitProjects,
-          limitTargets: config.limitTargets
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        if (response.status === 409) {
-          addLog('warning', 'Sunucuda zaten bir scan sürüyor. Bitmesini bekleyin veya "Cancel Scan" ile iptal edin.', 'Dashboard');
-          setIsScanning(true); // iptal butonu görünsün
-          setServerScanActive(true);
-          return;
-        }
-        throw new Error(errorData.error || 'Scan API hatası');
-      }
-
-      if (!response.body) {
-        throw new Error('Response body yok');
-      }
-
-      // SSE stream'ini oku
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        
-        if (done) {
-          break;
-        }
-
-        // Buffer'a yeni veriyi ekle
-        buffer += decoder.decode(value, { stream: true });
-        
-        // Satırları ayır
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Son satırı buffer'da tut (eksik olabilir)
-
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            // Event type'ı oku
-            const eventType = line.substring(6).trim();
-            continue;
-          }
-          
-          if (line.startsWith('data:')) {
-            try {
-              const data = JSON.parse(line.substring(5).trim());
-              
-              // Event'e göre işle
-              if (line.includes('"level"')) {
-                // Log event'i
-                addLog(data.level, data.message, data.source);
-              } else if (line.includes('"summary"')) {
-                // Complete event'i
-                setScanResults({
-                  results: data.results,
-                  summary: data.summary
-                });
-                addLog('success', `Scan tamamlandı! ${data.summary.totalBuilds} build bulundu (${data.summary.cachedProjects} cache, ${data.summary.freshProjects} yeni).`, 'Dashboard');
-              } else if (line.includes('"message"') && !line.includes('"level"')) {
-                // Error event'i
-                addLog('error', `Scan hatası: ${data.message}`, 'Dashboard');
-              }
-            } catch (e) {
-              console.error('SSE parse error:', e, line);
-            }
-          }
-        }
-      }
-
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
-      addLog('error', `Scan hatası: ${message}`, 'Dashboard');
-    } finally {
-      if (!serverScanActive) {
-        setIsScanning(false);
-      }
+    addLog('info', 'Full scan işi oluşturuluyor...', 'Dashboard');
+    const job = await createJob('full_scan', {
+      limitProjects: limitProjects,
+      limitTargets: config.limitTargets
+    });
+    if (job) {
+      addLog('success', `Full scan işi sıraya alındı (${job.id.slice(-6)}). İlerleme "Jobs" panelinde; sekmeyi kapatsanız da iş sürer.`, 'Dashboard');
     }
   };
 
-  // Sunucudaki aktif scan'i iptal et (bu sekmeden ya da başka bir sekmeden başlatılmış olabilir)
   const cancelScan = async () => {
-    try {
-      addLog('info', 'Scan iptal isteği gönderiliyor...', 'Dashboard');
-      const response = await fetch('/api/scan', { method: 'DELETE' });
-      if (response.ok) {
-        addLog('warning', 'Scan iptal edildi. Süren bekleme en geç 1 sn içinde kesilecek.', 'Dashboard');
-      } else {
-        addLog('info', 'Sunucuda aktif scan bulunamadı.', 'Dashboard');
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
-      addLog('error', `İptal hatası: ${message}`, 'Dashboard');
-    } finally {
-      setServerScanActive(false);
-      setIsScanning(false);
-    }
+    if (!activeScan) return;
+    await cancelJob(activeScan.id);
   };
 
   const clearCredentials = () => {
@@ -578,87 +447,15 @@ function Dashboard({ config }: { config: AppConfig }) {
     }
   };
 
-  // Delete all builds for a project
+  // Delete all builds for a project → job olarak sıraya alınır
   const deleteAllBuilds = async (projectId: string, projectName: string) => {
     try {
       setIsDeletingBuilds(true);
       setOpenMenuId(null);
-      addLog('info', `"${projectName}" projesinin tüm artifact'leri siliniyor...`, 'DeleteBuilds');
-
-      const response = await fetch(`/api/unity/orgs/${config.orgId}/projects/${projectId}/delete-builds`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': config.apiKey
-        },
-        body: JSON.stringify({
-          updateCache: true
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Delete builds API hatası');
+      const job = await createJob('delete_builds', { projectId, projectName, updateCache: true });
+      if (job) {
+        addLog('success', `"${projectName}" için artifact silme işi sıraya alındı. İlerleme "Jobs" panelinde.`, 'DeleteBuilds');
       }
-
-      if (!response.body) {
-        throw new Error('Response body yok');
-      }
-
-      // SSE stream'ini oku
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            continue;
-          }
-          
-          if (line.startsWith('data:')) {
-            try {
-              const data = JSON.parse(line.substring(5).trim());
-              
-              if (line.includes('"level"')) {
-                addLog(data.level, data.message, data.source);
-              } else if (line.includes('"deletedTargets"')) {
-                // Complete event
-                if (data.errors.length > 0) {
-                  addLog('warning', `Artifact silme tamamlandı (${data.deletedTargets}/${data.totalTargets} başarılı)`, 'DeleteBuilds');
-                } else {
-                  addLog('success', `✓ Tüm artifact'ler silindi (${data.deletedTargets} target)`, 'DeleteBuilds');
-                }
-                
-                // Reload cache
-                const reloadResponse = await fetch('/api/cache/projects');
-                if (reloadResponse.ok) {
-                  const projects = await reloadResponse.json();
-                  setCachedProjects(projects);
-                }
-              } else if (line.includes('"message"') && !line.includes('"level"')) {
-                addLog('error', `Delete builds hatası: ${data.message}`, 'DeleteBuilds');
-              }
-            } catch (e) {
-              console.error('SSE parse error:', e, line);
-            }
-          }
-        }
-      }
-
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
-      addLog('error', `Delete builds hatası: ${message}`, 'DeleteBuilds');
     } finally {
       setIsDeletingBuilds(false);
       setShowDeleteConfirm(null);
@@ -837,7 +634,7 @@ function Dashboard({ config }: { config: AppConfig }) {
                   fontSize: '16px'
                 }}
               >
-                {isScanning ? 'Scanning (Server-Side)...' : 'Start Project Scan'}
+                {isScanning ? (activeScan?.status === 'queued' ? 'Full Scan Sırada...' : 'Full Scan Çalışıyor...') : 'Start Full Scan'}
               </button>
               {isScanning && (
                 <button
@@ -857,6 +654,15 @@ function Dashboard({ config }: { config: AppConfig }) {
               )}
             </div>
           </div>
+
+          {/* Jobs */}
+          <JobsPanel
+            jobs={jobs}
+            isLoading={isLoadingJobs}
+            isConnected={isConnected}
+            onCancel={cancelJob}
+            onResume={resumeJob}
+          />
 
           {/* Cached Projects List */}
           {!isLoadingCache && cachedProjects.length > 0 && (
@@ -1063,27 +869,10 @@ function Dashboard({ config }: { config: AppConfig }) {
             </div>
           )}
 
-          {/* Scanning Indicator */}
-          {isScanning && (
-            <div style={{
-              backgroundColor: '#fff3cd',
-              padding: '15px',
-              borderRadius: '4px',
-              marginBottom: '20px',
-              border: '1px solid #ffc107'
-            }}>
-              <h4>⏳ Scan İşleniyor (Server-Side)</h4>
-              <p>Projeler server-side taranıyor ve cache'leniyor. Lütfen bekleyin...</p>
-              <p style={{ fontSize: '14px', color: '#666', marginTop: '10px' }}>
-                Log panelinde detaylı ilerleme görebilirsiniz.
-              </p>
-            </div>
-          )}
-
-          {/* Scan Results */}
+          {/* Last Full Scan Summary */}
           {scanResults && (
             <div style={{ marginBottom: '20px' }}>
-              <h3>Scan Results</h3>
+              <h3>Son Full Scan Özeti <span style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>({lastScan?.finishedAt ? new Date(lastScan.finishedAt).toLocaleString('tr-TR') : ''})</span></h3>
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
@@ -1092,36 +881,30 @@ function Dashboard({ config }: { config: AppConfig }) {
               }}>
                 <div style={{ backgroundColor: '#d4edda', padding: '15px', borderRadius: '4px' }}>
                   <h4>Total Projects</h4>
-                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalProjects}</p>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.totalProjects}</p>
                 </div>
                 <div style={{ backgroundColor: '#cce5ff', padding: '15px', borderRadius: '4px' }}>
                   <h4>Total Builds</h4>
-                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalBuilds}</p>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.totalBuilds}</p>
                 </div>
                 <div style={{ backgroundColor: '#fff3cd', padding: '15px', borderRadius: '4px' }}>
                   <h4>Total Targets</h4>
-                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalTargets}</p>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.totalTargets}</p>
                 </div>
-                <div style={{ backgroundColor: scanResults.summary.totalErrors > 0 ? '#f8d7da' : '#d1ecf1', padding: '15px', borderRadius: '4px' }}>
+                <div style={{ backgroundColor: (scanResults.failedProjects?.length ?? 0) > 0 ? '#f8d7da' : '#d1ecf1', padding: '15px', borderRadius: '4px' }}>
                   <h4>Tamamlanamayan</h4>
-                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalErrors}</p>
-                  {scanResults.summary.passes > 1 && (
-                    <p style={{ fontSize: '12px', margin: '4px 0 0 0', color: '#555' }}>{scanResults.summary.passes} geçiş yapıldı</p>
+                  <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.failedProjects?.length ?? 0}</p>
+                  {scanResults.passes > 1 && (
+                    <p style={{ fontSize: '12px', margin: '4px 0 0 0', color: '#555' }}>{scanResults.passes} geçiş yapıldı</p>
                   )}
                 </div>
               </div>
 
-              {scanResults.summary.cancelled && (
-                <div style={{ backgroundColor: '#fff3cd', color: '#856404', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
-                  Scan iptal edildi; sonuçlar eksik olabilir.
-                </div>
-              )}
-
-              {Array.isArray(scanResults.summary.failedProjects) && scanResults.summary.failedProjects.length > 0 && (
+              {Array.isArray(scanResults.failedProjects) && scanResults.failedProjects.length > 0 && (
                 <div style={{ backgroundColor: '#f8d7da', color: '#721c24', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
-                  <strong>Tüm denemelere rağmen tamamlanamayan projeler ({scanResults.summary.failedProjects.length}):</strong>
+                  <strong>Tüm denemelere rağmen tamamlanamayan projeler ({scanResults.failedProjects.length}):</strong>
                   <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
-                    {scanResults.summary.failedProjects.map((p: any) => (
+                    {scanResults.failedProjects.map((p) => (
                       <li key={p.projectId} style={{ marginBottom: '4px' }}>
                         <strong>{p.projectName}</strong> ({p.status})
                         {p.errors?.length > 0 && (
@@ -1130,47 +913,9 @@ function Dashboard({ config }: { config: AppConfig }) {
                       </li>
                     ))}
                   </ul>
-                  <p style={{ margin: '8px 0 0 0', fontSize: '12px' }}>Bu projeler cache'e alınmadı; bir sonraki scan'de otomatik olarak yeniden denenecek.</p>
+                  <p style={{ margin: '8px 0 0 0', fontSize: '12px' }}>Jobs panelindeki &quot;Eksikleri tekrar dene&quot; ile yalnızca bu projeler yeniden taranır.</p>
                 </div>
               )}
-
-              {/* Project Results Table */}
-              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Project</th>
-                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Total Builds</th>
-                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Targets</th>
-                    <th style={{ padding: '12px', textAlign: 'left', border: '1px solid #ddd' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scanResults.results.map((result: any, index: number) => (
-                    <tr key={index}>
-                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>{result.projectName}</td>
-                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>{result.totalBuilds}</td>
-                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                        {result.scannedTargets}/{result.targetCount}
-                      </td>
-                      <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                        <span style={{
-                          padding: '4px 8px',
-                          borderRadius: '3px',
-                          fontSize: '12px',
-                          backgroundColor:
-                            result.status === 'completed' ? '#d4edda' :
-                            result.status === 'partial' ? '#fff3cd' : '#f8d7da',
-                          color:
-                            result.status === 'completed' ? '#155724' :
-                            result.status === 'partial' ? '#856404' : '#721c24'
-                        }}>
-                          {result.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           )}
         </div>

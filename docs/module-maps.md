@@ -106,7 +106,7 @@ interface UnityCloudBuildService {
   setWaitCallback(cb): void
   setCancelCheck(check): void
   deleteArtifactsForTarget(projectId: string, buildTargetId: string): Promise<void>
-  deleteAllBuildsForProject(projectId: string, onProgress?: Function): Promise<DeletionResult>
+  deleteAllBuildsForProject(projectId: string, { skipTargetIds?, onTargetsListed?, onTargetStart?, onTargetDone? }): Promise<DeletionResult>
 }
 ```
 **Durum**: ✅ Tamamlandı - Tam proje scanning + artifact deletion desteği
@@ -224,7 +224,7 @@ interface LogContextType {
 **Sorumluluk**: Scanning işlem koordinasyonu
 ```typescript
 interface ScanOrchestrator {
-  startScan(options: ScanOptions): Promise<{ results, summary }>   // çok geçişli, tamamlanamayanları yeniden dener
+  startScan(options: ScanOptions, hooks?: ScanHooks): Promise<{ results, summary }>   // çok geçişli; hooks job sistemi için
   scanSingleProject(projectId, { orgId, apiKey, projectName?, limitTargets? }): Promise<ProjectScanResult>
   cancelScan(): void
   getScanProgress(): ScanProgress
@@ -240,9 +240,10 @@ interface ScanOrchestrator {
 - Rate limit tükenmesi veya 401'de scan tamamen durur; `summary.failedProjects` kalanları listeler
 **Durum**: ✅ Tamamlandı
 
-### 2. scan-registry ✅
-**Dosya**: `src/modules/scanning/scan-registry.ts`
-**Sorumluluk**: Süreç genelinde tek aktif scan kilidi (`getActiveScan`, `registerActiveScan`, `clearActiveScan`). `/api/scan` POST ikinci scan'i 409 ile reddeder, DELETE aktif scan'i iptal eder.
+### 2. Job Sistemi ✅
+**Dosyalar**: `src/modules/jobs/job-store.ts`, `job-events.ts`, `job-runner.ts`; `src/types/jobs.ts`; `src/hooks/useJobs.ts`; `src/components/JobsPanel.tsx`
+**Sorumluluk**: Full scan ve artifact silme işlerini kalıcı job olarak sıraya alır, tek işçiyle sıralı çalıştırır, ilerlemeyi `Job.progress` ve `JobItem` olarak yazar, servis yeniden başlayınca `interrupted` işaretleyip dashboard açılınca resume eder. Detay: `docs/job-system.md`.
+**Kritik**: API key DB'ye yazılmaz; sadece runner belleğinde.
 
 ## Modüller Arası İlişkiler
 

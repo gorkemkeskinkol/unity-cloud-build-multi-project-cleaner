@@ -93,3 +93,49 @@ model LogEntry {
   
   @@map("log_entries")
 }
+
+// ---------------------------------------------------------------------------
+// Job sistemi: uzun süren işler (full scan, artifact silme) kalıcı olarak
+// takip edilir; servis yeniden başlasa da kaldığı yerden devam eder.
+// API key ASLA burada saklanmaz; resume sırasında tarayıcıdan tekrar gelir.
+// ---------------------------------------------------------------------------
+
+model Job {
+  id         String    @id @default(cuid())
+  type       String    // "full_scan" | "delete_builds"
+  status     String    // "queued" | "running" | "interrupted" | "completed" | "failed" | "cancelled"
+  title      String
+  params     String    // JSON: { orgId, limitProjects?, limitTargets?, projectId?, projectName? }
+  progress   String?   // JSON: { total, done, failed, currentName?, pass?, maxPasses?, phase? }
+  result     String?   // JSON: iş bittiğinde özet
+  error      String?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  items JobItem[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("jobs")
+}
+
+model JobItem {
+  id        String   @id @default(cuid())
+  jobId     String
+  kind      String   // "project" | "target"
+  refId     String   // projectId veya buildTargetId
+  name      String
+  status    String   // "pending" | "running" | "completed" | "partial" | "failed" | "cancelled"
+  attempts  Int      @default(0)
+  error     String?
+  result    String?  // JSON: { totalBuilds, targetCount, scannedTargets } vb.
+  updatedAt DateTime @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, refId])
+  @@index([jobId, status])
+  @@map("job_items")
+}

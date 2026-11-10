@@ -186,64 +186,60 @@ export class UnityCloudBuildService {
    * Bir projenin tüm buildtarget'lerinin artifact'lerini sil.
    * Tek target'ta kalıcı hata olursa kaydedilir ve devam edilir; rate limit
    * beklemeleri tükenirse, key geçersizse veya iptal edildiyse hata fırlatılır.
+   * `skipTargetIds` ile daha önce silinmiş target'lar atlanır (job resume).
    */
   async deleteAllBuildsForProject(
     projectId: string,
-    onProgress?: (current: number, total: number, targetName: string) => void
+    options: {
+      skipTargetIds?: Set<string>;
+      onTargetsListed?: (targets: Array<{ id: string; name: string }>) => Promise<void> | void;
+      onTargetStart?: (targetId: string, targetName: string, index: number, total: number) => Promise<void> | void;
+      onTargetDone?: (targetId: string, targetName: string, error: string | null) => Promise<void> | void;
+    } = {}
   ): Promise<{
     deletedTargets: number;
     totalTargets: number;
+    skippedTargets: number;
     errors: Array<{ targetId: string; targetName: string; error: string }>;
   }> {
     const errors: Array<{ targetId: string; targetName: string; error: string }> = [];
     let deletedTargets = 0;
+    let skippedTargets = 0;
 
-    let targets: UnityBuildTarget[];
-    try {
-      targets = await this.listBuildTargets(projectId);
-    } catch (error) {
-      if (isFatal(error)) throw error;
-      const errorMessage = error instanceof ApiError ? error.describe() : String(error);
-      console.error(`[DELETE_ALL_BUILDS] buildtargets alınamadı:`, errorMessage);
-      return {
-        deletedTargets: 0,
-        totalTargets: 0,
-        errors: [{
-          targetId: 'N/A',
-          targetName: 'N/A',
-          error: `Buildtarget listesi alınamadı: ${errorMessage}`
-        }]
-      };
-    }
-
+    // Buildtarget listesi alınamazsa (yetki, 404...) devam edilemez: hata yukarı gider
+    const rawTargets = await this.listBuildTargets(projectId);
+    const targets = rawTargets
+      .map(t => ({ id: t.buildtargetid || t.buildTargetId || '', name: t.name || t.buildtargetid || t.buildTargetId || 'Unknown' }))
+      .filter(t => t.id);
     const totalTargets = targets.length;
     console.log(`[DELETE_ALL_BUILDS] Proje ${projectId} için ${totalTargets} target bulundu`);
+    await options.onTargetsListed?.(targets);
 
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i];
-      const buildTargetId = target.buildtargetid || target.buildTargetId;
-      const targetName = target.name || buildTargetId || 'Unknown';
 
-      if (!buildTargetId) {
-        errors.push({ targetId: 'unknown', targetName, error: 'buildtargetid bulunamadı' });
+      if (options.skipTargetIds?.has(target.id)) {
+        skippedTargets++;
         continue;
       }
 
+      await options.onTargetStart?.(target.id, target.name, i + 1, totalTargets);
       try {
-        onProgress?.(i + 1, totalTargets, targetName);
-        await this.deleteArtifactsForTarget(projectId, buildTargetId);
+        await this.deleteArtifactsForTarget(projectId, target.id);
         deletedTargets++;
-        console.log(`[DELETE_ALL_BUILDS] ✓ ${targetName} artifact'leri silindi (${i + 1}/${totalTargets})`);
+        console.log(`[DELETE_ALL_BUILDS] ✓ ${target.name} artifact'leri silindi (${i + 1}/${totalTargets})`);
+        await options.onTargetDone?.(target.id, target.name, null);
       } catch (error) {
         // Rate limit tükendi veya key geçersiz: sonraki target'ları denemek anlamsız
         if (isFatal(error)) throw error;
         const errorMessage = error instanceof ApiError ? error.describe() : String(error);
-        errors.push({ targetId: buildTargetId, targetName, error: errorMessage });
-        console.error(`[DELETE_ALL_BUILDS] ✗ ${targetName} artifact silme hatası:`, errorMessage);
+        errors.push({ targetId: target.id, targetName: target.name, error: errorMessage });
+        console.error(`[DELETE_ALL_BUILDS] ✗ ${target.name} artifact silme hatası:`, errorMessage);
+        await options.onTargetDone?.(target.id, target.name, errorMessage);
       }
     }
 
-    return { deletedTargets, totalTargets, errors };
+    return { deletedTargets, totalTargets, skippedTargets, errors };
   }
 }
 

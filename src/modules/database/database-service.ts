@@ -16,6 +16,11 @@ export class DatabaseService {
     return DatabaseService.instance;
   }
 
+  /** Diğer depolar (JobStore) aynı bağlantıyı kullansın */
+  public getClient(): PrismaClient {
+    return this.prisma;
+  }
+
   // Organization operations
   async upsertOrganization(orgId: string, name?: string): Promise<void> {
     await this.prisma.organization.upsert({

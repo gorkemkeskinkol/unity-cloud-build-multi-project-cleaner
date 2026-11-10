@@ -4,14 +4,24 @@ import { CredentialManager } from '@/modules/config/credential-manager';
 import { DatabaseService } from '@/modules/database/database-service';
 import { DEFAULT_CACHE_MAX_AGE_MS } from '@/modules/config/cache-config';
 import { ScanOptions, ScanProgress, ProjectScanResult, ScanSummary, UnityProject } from '@/types';
+import type { WaitInfo } from '@/modules/api/api-client';
 
 type LogLevel = 'info' | 'warning' | 'error' | 'success';
 type LogCallback = (level: LogLevel, message: string, source?: string) => void;
 
-interface ProjectRef {
+export interface ProjectRef {
   projectId: string;
   projectName: string;
   description?: string;
+}
+
+/** Job sistemi gibi dış takipçiler için adım adım kancalar */
+export interface ScanHooks {
+  onProjectsListed?: (projects: ProjectRef[]) => Promise<void> | void;
+  onProjectStart?: (project: ProjectRef, pass: number, maxPasses: number) => Promise<void> | void;
+  onProjectResult?: (result: ProjectScanResult, pass: number) => Promise<void> | void;
+  onWait?: (info: WaitInfo) => Promise<void> | void;
+  onPassCooldown?: (pass: number, maxPasses: number, waitMs: number) => Promise<void> | void;
 }
 
 /** Varsayılan geçiş sayısı: 1 ana tarama + 2 yeniden deneme */
@@ -52,7 +62,7 @@ export class ScanOrchestrator {
    * ya da geçiş hakkı bittiğinde biter. Sonuçta hangi projelerin eksik kaldığı
    * açıkça raporlanır.
    */
-  async startScan(options: ScanOptions = {}): Promise<{
+  async startScan(options: ScanOptions = {}, hooks: ScanHooks = {}): Promise<{
     results: ProjectScanResult[];
     summary: ScanSummary;
   }> {
@@ -68,7 +78,7 @@ export class ScanOrchestrator {
     this.isScanning = true;
     this.shouldCancel = false;
 
-    const unityService = this.createService(credentials.orgId, credentials.apiKey);
+    const unityService = this.createService(credentials.orgId, credentials.apiKey, hooks.onWait);
     const db = DatabaseService.getInstance();
     const limitTargets = options.limitTargets || credentials.limitTargets;
     const maxPasses = Math.max(1, options.maxPasses ?? DEFAULT_MAX_PASSES);
@@ -81,18 +91,28 @@ export class ScanOrchestrator {
       const orgTotalBuilds = await unityService.sanityCheckOrg();
       this.log('info', `Organizasyon toplam build sayısı: ${orgTotalBuilds}`);
 
-      const projects = await unityService.listProjects();
-      const limitProjects = options.limitProjects || credentials.limitProjects || -1;
-      const projectsToScan = limitProjects > 0 ? projects.slice(0, limitProjects) : projects;
-      this.log('info', `Toplam proje: ${projects.length} (${projectsToScan.length} taranacak)`);
+      let initialQueue: ProjectRef[];
+      if (options.projects) {
+        // Dışarıdan verilen liste (ör. job resume: yalnızca tamamlanmamış projeler)
+        initialQueue = options.projects;
+        this.log('info', `${initialQueue.length} proje taranacak (verilen liste)`);
+      } else {
+        const projects = await unityService.listProjects();
+        const limitProjects = options.limitProjects || credentials.limitProjects || -1;
+        const projectsToScan = limitProjects > 0 ? projects.slice(0, limitProjects) : projects;
+        this.log('info', `Toplam proje: ${projects.length} (${projectsToScan.length} taranacak)`);
+        initialQueue = projectsToScan.map(toProjectRef);
+      }
+      await hooks.onProjectsListed?.(initialQueue);
 
       await db.upsertOrganization(credentials.orgId);
 
       // Sonuçlar proje id'sine göre tutulur; yeniden denemeler eski sonucu ezer
       const results = new Map<string, ProjectScanResult>();
       const order: string[] = [];
-      let queue: ProjectRef[] = projectsToScan.map(toProjectRef);
+      let queue: ProjectRef[] = initialQueue;
       for (const ref of queue) order.push(ref.projectId);
+      const projectsToScan = initialQueue;
 
       let cachedProjects = 0;
       let passesRun = 0;
@@ -114,6 +134,7 @@ export class ScanOrchestrator {
 
         if (pass > 1) {
           this.log('warning', `${queue.length} proje tamamlanamadı. ${RETRY_PASS_COOLDOWN_MS / 1000} sn beklenip yeniden denenecek (geçiş ${pass}/${maxPasses})`);
+          await hooks.onPassCooldown?.(pass, maxPasses, RETRY_PASS_COOLDOWN_MS);
           try {
             await this.sleep(RETRY_PASS_COOLDOWN_MS);
           } catch (error) {
@@ -143,6 +164,8 @@ export class ScanOrchestrator {
             pendingProjects: queue.length - i
           });
 
+          await hooks.onProjectStart?.(ref, pass, maxPasses);
+
           // Cache kontrolü: sadece tamamlanmış taramalar cache sayılır
           if (pass === 1) {
             const cached = await this.readFromCache(db, ref, cacheMaxAgeMs);
@@ -150,6 +173,7 @@ export class ScanOrchestrator {
               results.set(ref.projectId, cached);
               cachedProjects++;
               this.log('success', `${ref.projectName}: ${cached.totalBuilds} builds (cache'den)`);
+              await hooks.onProjectResult?.(cached, pass);
               continue;
             }
           }
@@ -183,6 +207,7 @@ export class ScanOrchestrator {
           }
 
           results.set(ref.projectId, result);
+          await hooks.onProjectResult?.(result, pass);
 
           if (result.status === 'completed') {
             this.log('success', `${ref.projectName}: ${result.totalBuilds} builds (${result.scannedTargets}/${result.targetCount} targets)`);
@@ -310,8 +335,8 @@ export class ScanOrchestrator {
   }
 
   cancelScan(): void {
+    this.shouldCancel = true;
     if (this.isScanning) {
-      this.shouldCancel = true;
       this.log('info', 'Scan iptal ediliyor...');
     }
   }
@@ -422,10 +447,13 @@ export class ScanOrchestrator {
     };
   }
 
-  private createService(orgId: string, apiKey: string): UnityCloudBuildService {
+  private createService(orgId: string, apiKey: string, onWait?: ScanHooks['onWait']): UnityCloudBuildService {
     const service = new UnityCloudBuildService(orgId, apiKey);
     service.setCancelCheck(() => this.shouldCancel);
-    service.setWaitCallback((info) => this.logWait(info));
+    service.setWaitCallback((info) => {
+      this.logWait(info);
+      void onWait?.(info);
+    });
     return service;
   }
 

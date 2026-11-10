@@ -81,30 +81,28 @@ Sort Logic:
 
 ---
 
-## 2. Project Scanning ve Veri Toplama (Server-Side SSE)
+## 2. Project Scanning ve Veri Toplama (Job Sistemi)
+
+> Tarama ve artifact silme artık **job** olarak çalışır: sıralı, kalıcı, servis
+> yeniden başlasa da devam eden. Detay: `docs/job-system.md`.
 
 ### Veri Akışı
 ```
-Kullanıcı "Scan Projects" butonuna tıklar (Dashboard - client-side)
+Kullanıcı "Start Full Scan" butonuna tıklar (Dashboard - client-side)
     ↓
-fetch('/api/scan', { credentials, limitProjects, ... })
+POST /api/jobs { type: 'full_scan', params, credentials }
+    ├─ Credentials validation → 401 / 400
+    ├─ Job kaydı (status: queued) + credentials runner belleğine (DB'ye yazılmaz)
+    └─ 202 { job }
     ↓
-POST /api/scan endpoint (server-side)
-    ├─ Request body'den credentials alınır
-    ├─ Credentials validation (orgId, apiKey kontrolü)
-    ├─ [Validation başarısız ise] → 401 Unauthorized döner
-    ├─ Aktif scan kilidi (scan-registry): zaten bir scan sürüyorsa → 409 Conflict
-    │   (UI "Cancel Scan" butonu gösterir; DELETE /api/scan ile iptal edilebilir)
-    └─ İstemci bağlantıyı koparırsa (request.signal abort) scan iptal edilir
+JobRunner (tek işçi) sıradaki job'ı alır → running
     ↓
-SSE Stream başlatılır (ReadableStream)
-    ↓
-ScanOrchestrator.startScan(options) çağrılır
+ScanOrchestrator.startScan(options, hooks) çağrılır
     ├─ options.credentials kullanılır (localStorage DEĞİL!)
-    ├─ Log callback set edilir → SSE event olarak stream edilir
-    └─ Progress callback set edilir → SSE event olarak stream edilir
+    ├─ Log callback → JobEventBus 'log' → SSE → LogPanel
+    └─ hooks (onProjectStart/onProjectResult/onWait...) → JobItem + Job.progress → SSE → JobsPanel
     ↓
-[GERÇEK ZAMANLI STREAMING BAŞLAR]
+[GERÇEK ZAMANLI STREAMING: GET /api/jobs/events (EventSource)]
     ↓
 UnityCloudBuildService.listProjects()
     ├─ Log Event → SSE stream → Client LogContext.addLog()
@@ -123,21 +121,19 @@ ScanOrchestrator.scanAndPersist() (her proje için sıralı)
 Tamamlanamayan projeler için yeniden deneme geçişleri (bkz. Bölüm 6)
     ↓
 Scan tamamlanır
-    ├─ Complete Event → SSE stream → Client
-    │   ├─ { results, summary } içerir
-    │   └─ Client final state'i alır
-    └─ SSE stream kapatılır (controller.close())
-    ↓
-Client connection kapanır
-    ↓
-Dashboard final verileri gösterir
+    ├─ Job → completed, result = summary (failedProjects dahil)
+    └─ 'job' event → Dashboard "Son Full Scan Özeti" ve JobsPanel güncellenir
 ```
 
-### Diğer /api/scan Endpoint'leri
-- `GET /api/scan` → `{ isScanning, startedAt, progress, rateLimitBlockMs }`; sayfa açılışında sunucuda süren scan'i göstermek için
-- `DELETE /api/scan` → aktif scan'i iptal eder (süren bekleme en geç 1 sn içinde kesilir)
+Tarayıcı sekmesi kapansa da job sürer (credentials runner belleğinde). Servis kapanırsa job
+`interrupted` olur ve dashboard açıldığında otomatik resume edilir.
 
-### SSE Event Tipleri
+### Job Endpoint'leri
+- `GET /api/jobs`, `POST /api/jobs`, `GET /api/jobs/[id]`, `POST /api/jobs/[id]/cancel`,
+  `POST /api/jobs/[id]/resume`, `GET /api/jobs/events` (bkz. `docs/job-system.md`)
+
+### SSE Event Tipleri (`GET /api/jobs/events`)
+0. **backlog** - Bağlanınca son 300 log (geç açılan sekme için)
 1. **log** - Her log mesajı için
    ```json
    {
@@ -148,36 +144,20 @@ Dashboard final verileri gösterir
    }
    ```
 
-2. **progress** - İlerleme güncellemeleri için
+2. **job** - Job kaydı her değiştiğinde (status, progress, result)
    ```json
    {
-     "currentProject": 3,
-     "totalProjects": 5,
-     "currentProjectName": "Proje Adı",
-     "isScanning": true
-   }
-   ```
-
-3. **complete** - Scan tamamlandığında
-   ```json
-   {
-     "results": [...],
-     "summary": {...}
-   }
-   ```
-
-4. **error** - Hata oluştuğunda
-   ```json
-   {
-     "message": "Hata mesajı"
+     "kind": "job",
+     "job": { "id": "...", "type": "full_scan", "status": "running",
+              "progress": { "total": 264, "done": 120, "failed": 2, "phase": "Taranıyor", "currentName": "Hyper X" } }
    }
    ```
 
 ### Kritik Noktalar
 - **Real-time streaming**: Log'lar oluşturulduğu anda client'a ulaşır
 - **SSE (Server-Sent Events)** standardı kullanılır (WebSocket değil)
-- **Credentials client'dan server'a HTTP request body ile gönderilir**
-- Server-side credentials localStorage'a erişemez (window object yok)
+- **Credentials client'dan server'a HTTP request body ile gönderilir**, veritabanına yazılmaz
+- Server-side credentials localStorage'a erişemez (window object yok); bu yüzden resume için dashboard açık olmalı
 - Her log server'da oluşturulur ve anında SSE event olarak stream edilir
 - Hata durumlarında partial results korunur
 - Progress tracking gerçek zamanlı olarak client'a iletilir

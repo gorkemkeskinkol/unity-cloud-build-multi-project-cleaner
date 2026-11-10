@@ -83,6 +83,8 @@ export interface ScanOptions {
   cacheMaxAgeMs?: number;
   /** Tamamlanamayan projeler için toplam geçiş sayısı (varsayılan 3) */
   maxPasses?: number;
+  /** Verilirse API'den proje listesi çekilmez, bu liste taranır (job resume) */
+  projects?: Array<{ projectId: string; projectName: string; description?: string }>;
 }
 
 export interface ScanProgress {

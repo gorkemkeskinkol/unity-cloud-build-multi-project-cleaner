@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { UnityCloudBuildService } from '@/modules/api/unity-cloud-build';
+import { ApiError, describeWait } from '@/modules/api/api-client';
 import { CredentialManager } from '@/modules/config/credential-manager';
 
 export async function DELETE(
@@ -46,14 +47,41 @@ export async function DELETE(
     // SSE için encoder
     const encoder = new TextEncoder();
     
+    // Tarayıcı bağlantıyı koparırsa süren rate limit beklemeleri kesilir
+    let clientGone = false;
+    request.signal.addEventListener('abort', () => {
+      clientGone = true;
+      console.warn('[DELETE_BUILDS_API] İstemci bağlantıyı kopardı, bekleyen işlemler iptal ediliyor');
+    });
+    unityService.setCancelCheck(() => clientGone);
+
     const stream = new ReadableStream({
       async start(controller) {
+        let closed = false;
+        const send = (eventType: string, payload: unknown) => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(payload)}\n\n`));
+          } catch (error) {
+            closed = true;
+            console.error('SSE send error:', error);
+          }
+        };
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          try { controller.close(); } catch { /* zaten kapalı */ }
+        };
+        // Log event gönder
+        const sendLog = (level: string, message: string, source: string = 'DeleteBuilds') => {
+          send('log', { level, message, source });
+        };
+
         try {
-          // Log event gönder
-          const sendLog = (level: string, message: string, source: string = 'DeleteBuilds') => {
-            const data = JSON.stringify({ level, message, source });
-            controller.enqueue(encoder.encode(`event: log\ndata: ${data}\n\n`));
-          };
+          // Rate limit / geçici hata beklemeleri kullanıcıya anında bildirilsin
+          unityService.setWaitCallback((info) => {
+            sendLog('warning', describeWait(info), 'DeleteBuilds');
+          });
 
           sendLog('info', `Proje ${projectId} için artifact silme işlemi başlatılıyor...`, 'DeleteBuilds');
 
@@ -123,23 +151,26 @@ export async function DELETE(
           }
 
           // Complete event
-          const completeData = JSON.stringify({
+          send('complete', {
             deletedTargets: result.deletedTargets,
             totalTargets: result.totalTargets,
             errors: result.errors,
             cacheUpdated: updateCache
           });
-          controller.enqueue(encoder.encode(`event: complete\ndata: ${completeData}\n\n`));
-
-          controller.close();
+          close();
         } catch (error) {
           console.error('[DELETE_BUILDS_API] Error:', error);
-          
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          const errorData = JSON.stringify({ message: errorMessage });
-          controller.enqueue(encoder.encode(`event: error\ndata: ${errorData}\n\n`));
-          controller.close();
+
+          const errorMessage = error instanceof ApiError
+            ? `${error.describe()} - silme işlemi durduruldu, hiçbir target atlanmadı; daha sonra tekrar deneyin`
+            : (error instanceof Error ? error.message : 'Unknown error');
+          sendLog('error', errorMessage, 'DeleteBuilds');
+          send('error', { message: errorMessage });
+          close();
         }
+      },
+      cancel() {
+        clientGone = true;
       }
     });
 

@@ -70,10 +70,14 @@ interface CredentialManager {
 **Sorumluluk**: Temel HTTP operations (Dual-mode: Client & Server)
 ```typescript
 interface ApiClient {
-  get<T>(endpoint: string, params?: object): Promise<T>
+  get(endpoint: string, params?: object): Promise<Response>
   delete(endpoint: string): Promise<Response>
   getContentRangeTotal(response: Response): number
+  setWaitCallback(cb?: (info: WaitInfo) => void): void   // bekleme bildirimi (loglama)
+  setCancelCheck(check?: () => boolean): void            // bekleme sırasında iptal
 }
+class ApiError { status; kind: 'rate_limit'|'auth'|'forbidden'|'not_found'|'client'|'server'|'network'; describe() }
+class CancelledError
 ```
 **Özellikler**:
 - **Client-side**: Next.js API routes üzerinden proxy (`/api/unity/...`)
@@ -81,7 +85,10 @@ interface ApiClient {
 - Otomatik environment detection (`typeof window === 'undefined'`)
 - Client: `x-api-key` header | Server: `Basic` auth
 - 30 saniye timeout
-- Automatic error handling
+- Tek `request()` giriş noktası: throttle (istekler arası min. 400 ms, `UNITY_API_MIN_INTERVAL_MS`) + sınıflandırılmış retry
+- Rate limit (429 / abuse detection 403): Retry-After veya 1→15 dk arası bekleme, 10 denemeye kadar; blok durumu static, tüm instance'lar bekler
+- 5xx / ağ hatası: 3s→24s, 5 deneme. 401/404: tekrar denenmez
+- Beklemeler iptal edilebilir (`CancelledError`)
 
 **Durum**: ✅ Tamamlandı - Hem client hem server-side çalışır, CORS sorunu yok
 
@@ -95,7 +102,9 @@ interface UnityCloudBuildService {
   listBuildTargets(orgId: string, projectId: string): Promise<BuildTarget[]>
   countBuilds(orgId: string, projectId: string, buildTargetId: string): Promise<number>
   sanityCheckOrg(orgId: string): Promise<number>
-  getTotalBuildsForProject(projectId: string, limitTargets?: number): Promise<ScanResult>
+  scanProject(projectId: string, limitTargets?: number): Promise<ProjectScanData>  // targets + sayımlar tek seferde
+  setWaitCallback(cb): void
+  setCancelCheck(check): void
   deleteArtifactsForTarget(projectId: string, buildTargetId: string): Promise<void>
   deleteAllBuildsForProject(projectId: string, onProgress?: Function): Promise<DeletionResult>
 }
@@ -215,15 +224,25 @@ interface LogContextType {
 **Sorumluluk**: Scanning işlem koordinasyonu
 ```typescript
 interface ScanOrchestrator {
-  startScan(options: ScanOptions): Promise<ScanResult>
+  startScan(options: ScanOptions): Promise<{ results, summary }>   // çok geçişli, tamamlanamayanları yeniden dener
+  scanSingleProject(projectId, { orgId, apiKey, projectName?, limitTargets? }): Promise<ProjectScanResult>
   cancelScan(): void
   getScanProgress(): ScanProgress
   setProgressCallback(callback: Function): void
   setLogCallback(callback: Function): void
 }
 ```
-**Bağımlılık**: UnityCloudBuildService, CredentialManager
-**Durum**: ✅ Tamamlandı - Python scriptinin tam karşılığı
+**Bağımlılık**: UnityCloudBuildService, CredentialManager, DatabaseService
+**Davranış**:
+- Her proje için `scanAndPersist()`: `scanProject()` sonucu tek seferde DB'ye yazılır (ikinci API turu yok)
+- `lastScannedAt` yalnızca `completed` taramalarda set edilir
+- Geçiş 1'de tamamlanamayan projeler 60 sn soğumadan sonra yeniden denenir (varsayılan 3 geçiş, `ScanOptions.maxPasses`)
+- Rate limit tükenmesi veya 401'de scan tamamen durur; `summary.failedProjects` kalanları listeler
+**Durum**: ✅ Tamamlandı
+
+### 2. scan-registry ✅
+**Dosya**: `src/modules/scanning/scan-registry.ts`
+**Sorumluluk**: Süreç genelinde tek aktif scan kilidi (`getActiveScan`, `registerActiveScan`, `clearActiveScan`). `/api/scan` POST ikinci scan'i 409 ile reddeder, DELETE aktif scan'i iptal eder.
 
 ## Modüller Arası İlişkiler
 

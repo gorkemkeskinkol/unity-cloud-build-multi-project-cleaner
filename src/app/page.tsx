@@ -214,6 +214,7 @@ function LogPanel() {
 // Dashboard Component
 function Dashboard({ config }: { config: AppConfig }) {
   const [isScanning, setIsScanning] = useState(false);
+  const [serverScanActive, setServerScanActive] = useState(false);
   const [scanResults, setScanResults] = useState<any>(null);
   const [limitProjects, setLimitProjects] = useState<number | undefined>(undefined); // Default boş
   const [cachedProjects, setCachedProjects] = useState<any[]>([]);
@@ -226,6 +227,21 @@ function Dashboard({ config }: { config: AppConfig }) {
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const [sortOptions, setSortOptions] = useState<SortOptions>({ field: 'totalBuilds', direction: 'desc' });
   const { addLog } = useLog();
+
+  // Sayfa açıldığında sunucuda süren bir scan var mı?
+  useEffect(() => {
+    fetch('/api/scan')
+      .then(r => r.ok ? r.json() : null)
+      .then(status => {
+        if (status?.isScanning) {
+          setIsScanning(true);
+          setServerScanActive(true);
+          addLog('warning', 'Sunucuda devam eden bir scan var (başka bir sekmeden başlatılmış olabilir). İzlemek için o sekmeye dönün veya "Cancel Scan" ile iptal edin.', 'Dashboard');
+        }
+      })
+      .catch(() => { /* durum alınamazsa sessizce geç */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load cached projects on mount
   useEffect(() => {
@@ -330,6 +346,12 @@ function Dashboard({ config }: { config: AppConfig }) {
 
       if (!response.ok) {
         const errorData = await response.json();
+        if (response.status === 409) {
+          addLog('warning', 'Sunucuda zaten bir scan sürüyor. Bitmesini bekleyin veya "Cancel Scan" ile iptal edin.', 'Dashboard');
+          setIsScanning(true); // iptal butonu görünsün
+          setServerScanActive(true);
+          return;
+        }
         throw new Error(errorData.error || 'Scan API hatası');
       }
 
@@ -393,6 +415,27 @@ function Dashboard({ config }: { config: AppConfig }) {
       const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
       addLog('error', `Scan hatası: ${message}`, 'Dashboard');
     } finally {
+      if (!serverScanActive) {
+        setIsScanning(false);
+      }
+    }
+  };
+
+  // Sunucudaki aktif scan'i iptal et (bu sekmeden ya da başka bir sekmeden başlatılmış olabilir)
+  const cancelScan = async () => {
+    try {
+      addLog('info', 'Scan iptal isteği gönderiliyor...', 'Dashboard');
+      const response = await fetch('/api/scan', { method: 'DELETE' });
+      if (response.ok) {
+        addLog('warning', 'Scan iptal edildi. Süren bekleme en geç 1 sn içinde kesilecek.', 'Dashboard');
+      } else {
+        addLog('info', 'Sunucuda aktif scan bulunamadı.', 'Dashboard');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
+      addLog('error', `İptal hatası: ${message}`, 'Dashboard');
+    } finally {
+      setServerScanActive(false);
       setIsScanning(false);
     }
   };
@@ -796,6 +839,22 @@ function Dashboard({ config }: { config: AppConfig }) {
               >
                 {isScanning ? 'Scanning (Server-Side)...' : 'Start Project Scan'}
               </button>
+              {isScanning && (
+                <button
+                  onClick={cancelScan}
+                  style={{
+                    padding: '12px 24px',
+                    backgroundColor: '#dc3545',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '16px'
+                  }}
+                >
+                  Cancel Scan
+                </button>
+              )}
             </div>
           </div>
 
@@ -1044,10 +1103,36 @@ function Dashboard({ config }: { config: AppConfig }) {
                   <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalTargets}</p>
                 </div>
                 <div style={{ backgroundColor: scanResults.summary.totalErrors > 0 ? '#f8d7da' : '#d1ecf1', padding: '15px', borderRadius: '4px' }}>
-                  <h4>Errors</h4>
+                  <h4>Tamamlanamayan</h4>
                   <p style={{ fontSize: '24px', margin: 0 }}>{scanResults.summary.totalErrors}</p>
+                  {scanResults.summary.passes > 1 && (
+                    <p style={{ fontSize: '12px', margin: '4px 0 0 0', color: '#555' }}>{scanResults.summary.passes} geçiş yapıldı</p>
+                  )}
                 </div>
               </div>
+
+              {scanResults.summary.cancelled && (
+                <div style={{ backgroundColor: '#fff3cd', color: '#856404', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
+                  Scan iptal edildi; sonuçlar eksik olabilir.
+                </div>
+              )}
+
+              {Array.isArray(scanResults.summary.failedProjects) && scanResults.summary.failedProjects.length > 0 && (
+                <div style={{ backgroundColor: '#f8d7da', color: '#721c24', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
+                  <strong>Tüm denemelere rağmen tamamlanamayan projeler ({scanResults.summary.failedProjects.length}):</strong>
+                  <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
+                    {scanResults.summary.failedProjects.map((p: any) => (
+                      <li key={p.projectId} style={{ marginBottom: '4px' }}>
+                        <strong>{p.projectName}</strong> ({p.status})
+                        {p.errors?.length > 0 && (
+                          <span style={{ color: '#9b4a52' }}> - {p.errors.slice(0, 2).join('; ')}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <p style={{ margin: '8px 0 0 0', fontSize: '12px' }}>Bu projeler cache'e alınmadı; bir sonraki scan'de otomatik olarak yeniden denenecek.</p>
+                </div>
+              )}
 
               {/* Project Results Table */}
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white' }}>

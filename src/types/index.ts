@@ -79,6 +79,10 @@ export interface ScanOptions {
   limitProjects?: number;
   limitTargets?: number;
   parallelRequests?: number;
+  /** Bu süreden eski cache kayıtları yeniden taranır (ms). Varsayılan: DEFAULT_CACHE_MAX_AGE_MS (1 hafta) */
+  cacheMaxAgeMs?: number;
+  /** Tamamlanamayan projeler için toplam geçiş sayısı (varsayılan 3) */
+  maxPasses?: number;
 }
 
 export interface ScanProgress {
@@ -89,6 +93,32 @@ export interface ScanProgress {
   totalTargets: number;
   isScanning: boolean;
   canCancel: boolean;
+  /** Kaçıncı geçiş (1 = ilk tarama, 2+ = başarısızların yeniden denenmesi) */
+  pass?: number;
+  maxPasses?: number;
+  /** Henüz tamamlanamamış proje sayısı */
+  pendingProjects?: number;
+}
+
+/** Tek bir build target'ın tarama sonucu */
+export interface TargetScanData {
+  id: string;
+  name: string;
+  platform?: string;
+  enabled: boolean;
+  /** null ise sayım alınamadı (error dolu olur) */
+  buildCount: number | null;
+  error?: string;
+}
+
+/** Tek bir projenin API'den alınan tarama verisi (persist edilmeden önce) */
+export interface ProjectScanData {
+  projectId: string;
+  totalBuilds: number;
+  targetCount: number;
+  scannedTargets: number;
+  targets: TargetScanData[];
+  errors: string[];
 }
 
 export interface ProjectScanResult {
@@ -111,6 +141,12 @@ export interface ScanSummary {
   totalErrors: number;
   cachedProjects: number; // Cache'den gelen proje sayısı
   freshProjects: number; // API'den yeni taranan proje sayısı
+  /** Tüm geçişlere rağmen tamamlanamayan projeler */
+  failedProjects: Array<{ projectId: string; projectName: string; status: 'failed' | 'partial'; errors: string[] }>;
+  /** Kaç geçiş yapıldı */
+  passes: number;
+  /** Kullanıcı iptal ettiyse true */
+  cancelled: boolean;
 }
 
 // API Response Types

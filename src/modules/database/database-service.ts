@@ -81,12 +81,13 @@ export class DatabaseService {
     }));
   }
 
-  async getAllCachedProjects(): Promise<ProjectData[]> {
+  /** Tamamlanmış taraması olan projeler. maxAgeMs verilirse daha eski taramalar listelenmez. */
+  async getAllCachedProjects(maxAgeMs?: number): Promise<ProjectData[]> {
     const projects = await this.prisma.project.findMany({
       where: {
-        lastScannedAt: {
-          not: null
-        }
+        lastScannedAt: maxAgeMs && maxAgeMs > 0
+          ? { gte: new Date(Date.now() - maxAgeMs) }
+          : { not: null }
       },
       include: {
         buildTargets: {
@@ -129,13 +130,18 @@ export class DatabaseService {
     });
   }
 
-  async isProjectCached(projectId: string): Promise<boolean> {
+  /**
+   * Proje cache'de mi? lastScannedAt yalnızca tamamlanmış taramalarda set edildiği
+   * için yarım kalan projeler burada false döner. maxAgeMs verilirse daha eski
+   * kayıtlar da cache sayılmaz.
+   */
+  async isProjectCached(projectId: string, maxAgeMs?: number): Promise<boolean> {
     const project = await this.prisma.project.findFirst({
       where: {
         id: projectId,
-        lastScannedAt: {
-          not: null
-        }
+        lastScannedAt: maxAgeMs && maxAgeMs > 0
+          ? { gte: new Date(Date.now() - maxAgeMs) }
+          : { not: null }
       }
     });
 

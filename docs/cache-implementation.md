@@ -27,7 +27,7 @@ await db.clearAllCache(orgId) // Tüm organizasyon
 
 **Cache Mekanizması**:
 - `lastScannedAt` field'ı ile proje son tarama zamanı tutulur
-- Cache kontrolü: Proje kaydı var mı ve lastScannedAt null mu değil? (manuel clear ile korunur)
+- Cache kontrolü: Proje kaydı var mı ve lastScannedAt null mu değil? (manuel clear ile korunur). `lastScannedAt` yalnızca `completed` taramalarda set edilir; partial/failed projeler cache sayılmaz ve bir sonraki scan'de yeniden taranır
 - Cache persistent: Manual clean'e kadar geçerli
 
 ### 2. Scan Orchestrator Güncellemeleri

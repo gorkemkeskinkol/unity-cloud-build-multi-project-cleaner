@@ -142,20 +142,29 @@ const config = CredentialManager.getCredentials();
 const isValid = CredentialManager.hasValidCredentials();
 ```
 
+## Rate Limiting ve Güvenilir Tarama
+
+Unity Cloud Build API, kısa sürede çok istek gelince `403` + "abuse detection" mesajıyla geçici blok uygular. Tarama bunu şöyle yönetir:
+
+- İstekler arası en az 400 ms beklenir (`UNITY_API_MIN_INTERVAL_MS` ile ayarlanabilir)
+- Blok alındığında 1 dk'dan başlayıp 15 dk'ya çıkan beklemelerle aynı istek tekrar denenir; bu sırada başka istek atılmaz (scan ve artifact silme ortak pencereyi paylaşır)
+- Aynı anda tek scan çalışır; ikincisi reddedilir. "Cancel Scan" ile süren scan iptal edilebilir, sekme kapanınca scan durur
+- Artifact silmede de beklemeler logda gösterilir; limit tükenirse işlem durur, target atlanmaz
+- Tamamlanamayan projeler scan sonunda 60 sn soğumadan sonra yeniden denenir (3 geçiş)
+- Yarım kalan projeler cache'e alınmaz; bir sonraki scan'de otomatik olarak tekrar taranır
+- Scan sonunda hâlâ eksik proje varsa dashboard'da kırmızı kutuda listelenir
+
 ## Known Issues
 
-1. **npm install failure**: Currently fails due to disk space constraints
-2. **Mantine UI**: UI components not yet implemented - basic HTML structure in place
-3. **Database operations**: Prisma client integration pending npm install completion
-4. **TypeScript dependencies**: Some type resolution issues due to missing node_modules
+1. **Mantine UI**: UI components not yet implemented - basic HTML structure in place
+2. **Unity V1 API**: `build-api.cloud.unity3d.com` V1 API'si Unity tarafından emekliye ayrılıyor; Service Account (V2/V3) desteği henüz yok
 
 ## Next Steps
 
-1. **Resolve dependency installation** (requires disk space cleanup)
-2. **Implement Mantine UI components** for the dashboard interface
-3. **Add database persistence** for scan results
-4. **Implement data visualization** for build statistics
-5. **Add export functionality** for scan results
+1. **Implement Mantine UI components** for the dashboard interface
+2. **Migrate to Build Automation V2/V3 API** (service account auth)
+3. **Implement data visualization** for build statistics
+4. **Add export functionality** for scan results
 
 ## Contributing
 

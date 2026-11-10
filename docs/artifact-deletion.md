@@ -85,7 +85,7 @@ Bir projenin tüm buildtarget'lerinin artifact'lerini siler.
 1. Projenin tüm buildtarget'lerini listele
 2. Her buildtarget için artifact silme endpoint'ini çağır
 3. Progress callback ile ilerleme bildir
-4. Rate limiting için target'ler arası 150ms delay
+4. Rate limiting: ApiClient throttle (istekler arası 400 ms) + beklemeli retry
 5. Hataları topla ve raporla
 
 ## Unity Cloud Build API Endpoint
@@ -112,7 +112,7 @@ Bir projenin tüm buildtarget'lerinin artifact'lerini siler.
 5. **Backend**: Her target için:
    - Artifact silme endpoint'ini çağır
    - Progress log event gönder
-   - 150ms delay (rate limiting)
+   - ApiClient throttle (rate limiting)
 6. **Backend**: Sonuç özeti complete event olarak gönder
 7. **Backend**: (Opsiyonel) Cache'i güncelle
 8. **Frontend**: Cache'i reload et ve kullanıcıya bildir
@@ -132,10 +132,13 @@ Buildtarget listesi alınamazsa:
 - Kullanıcıya hata mesajı gösterilir
 
 ### Rate Limiting
-API rate limit'e takılırsa:
-- ApiClient otomatik retry mekanizması devreye girer
-- Exponential backoff ile 3 deneme yapılır
-- Her target arası 150ms delay zaten uygulanmış
+API rate limit'e takılırsa (HTTP 429 veya abuse detection mesajlı 403):
+- ApiClient aynı isteği 1 → 2 → 5 → 10 → 15 dk beklemelerle tekrar dener (en fazla 10 deneme)
+- Her bekleme SSE log olarak kullanıcıya anında gösterilir ("Unity API geçici olarak engelledi ... 60 sn bekleniyor")
+- Blok durumu süreç genelinde paylaşılır: aynı anda süren bir scan varsa o da bekler, Unity ayrı ayrı yoklanmaz
+- Beklemeler tükenirse veya API key geçersizse (401) silme işlemi **durur**, sonraki target'lar atlanmaz ve kullanıcıya "daha sonra tekrar deneyin" hatası gösterilir
+- Tarayıcı bağlantıyı koparırsa (sekme kapandı) süren beklemeler iptal edilir
+- İstekler arası en az 400 ms throttle uygulanır (`UNITY_API_MIN_INTERVAL_MS`)
 
 ## Güvenlik Önlemleri
 
@@ -153,8 +156,8 @@ API rate limit'e takılırsa:
    - Server-side validation yapılır
 
 4. **Rate Limiting**:
-   - Target'ler arası 150ms delay
-   - ApiClient'da built-in retry logic
+   - İstekler arası 400 ms throttle (ApiClient, tüm instance'lar ortak)
+   - Rate limit'te dakikalık beklemeli retry; beklemeler SSE log ile bildirilir
 
 ## Cache Yönetimi
 
@@ -203,9 +206,9 @@ Build silme sonrası yapılan re-scan işlemi:
 
 ### Optimizasyonlar:
 - SSE kullanarak real-time feedback
-- Target'ler arası 150ms delay ile rate limiting
+- İstekler arası 400 ms throttle ile rate limiting
 - Parallel olmayan sequential işlem (API rate limit nedeniyle)
-- Error durumunda diğer target'lere devam etme
+- Tek target'ta kalıcı hata (404 vb.) olursa diğer target'lere devam etme; rate limit tükenmesi / 401'de durma
 
 ### Beklenen Süre:
 - 1 target: ~1 saniye

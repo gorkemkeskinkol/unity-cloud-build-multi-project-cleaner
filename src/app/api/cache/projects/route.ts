@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 import { DatabaseService } from '@/modules/database/database-service';
+import { DEFAULT_CACHE_MAX_AGE_MS } from '@/modules/config/cache-config';
 
 export async function GET() {
   try {
     const db = DatabaseService.getInstance();
-    // 1 hafta = 7 gün * 24 saat * 60 dakika * 60 saniye * 1000 ms
-    const oneWeekMs = 7 * 24 * 60 * 60 * 1000; // 604800000ms
-    const projects = await db.getAllCachedProjects(oneWeekMs);
+    const projects = await db.getAllCachedProjects(DEFAULT_CACHE_MAX_AGE_MS);
     
     return NextResponse.json(projects);
   } catch (error) {

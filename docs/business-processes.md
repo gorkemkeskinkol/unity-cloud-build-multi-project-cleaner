@@ -25,7 +25,8 @@ CredentialManager.getCredentials()
 ```
 
 ### Kritik Noktalar
-- Cache TTL (Time To Live): Default 1 saat (cacheMaxAgeMs parametresi ile ayarlanabilir)
+- Cache TTL: varsayılan 1 hafta (`DEFAULT_CACHE_MAX_AGE_MS`, `src/modules/config/cache-config.ts`); hem Cached Projects listesi hem scan'deki cache kontrolü aynı değeri kullanır. `cacheMaxAgeMs` ile scan bazında değiştirilebilir
+- `lastScannedAt` yalnızca eksiksiz tamamlanan taramalarda set edilir (partial/failed projeler cache sayılmaz)
 - Cache kontrolü her scan'de proje bazında yapılır
 - Cache temizleme işlemi cascade delete ile ilgili tüm verileri siler
 - Cache'den gelen projeler status'ünde görsel olarak işaretlenir
@@ -91,7 +92,10 @@ fetch('/api/scan', { credentials, limitProjects, ... })
 POST /api/scan endpoint (server-side)
     ├─ Request body'den credentials alınır
     ├─ Credentials validation (orgId, apiKey kontrolü)
-    └─ [Validation başarısız ise] → 401 Unauthorized döner
+    ├─ [Validation başarısız ise] → 401 Unauthorized döner
+    ├─ Aktif scan kilidi (scan-registry): zaten bir scan sürüyorsa → 409 Conflict
+    │   (UI "Cancel Scan" butonu gösterir; DELETE /api/scan ile iptal edilebilir)
+    └─ İstemci bağlantıyı koparırsa (request.signal abort) scan iptal edilir
     ↓
 SSE Stream başlatılır (ReadableStream)
     ↓
@@ -106,14 +110,17 @@ UnityCloudBuildService.listProjects()
     ├─ Log Event → SSE stream → Client LogContext.addLog()
     └─ Client UI ANINDA güncellenir
     ↓
-ProjectProcessor.process() (her proje için sıralı)
+ScanOrchestrator.scanAndPersist() (her proje için sıralı)
     ├─ Her adımda:
     │   ├─ Log Event → SSE stream → Client
-    │   ├─ Progress Event → SSE stream → Client  
+    │   ├─ Progress Event → SSE stream → Client (pass, pendingProjects dahil)
     │   └─ Client UI GERÇEK ZAMANLI güncellenir
-    ├─ UnityCloudBuildService.listBuildTargets()
-    ├─ UnityCloudBuildService.countBuilds() (her target için)
-    └─ DatabaseService.saveProject() (işlem tamamında)
+    ├─ UnityCloudBuildService.scanProject()
+    │   ├─ listBuildTargets() (1 istek)
+    │   └─ countBuilds() (her target için 1 istek)
+    └─ DatabaseService.* (sonuç, target'lar, sayımlar; completed ise lastScannedAt)
+    ↓
+Tamamlanamayan projeler için yeniden deneme geçişleri (bkz. Bölüm 6)
     ↓
 Scan tamamlanır
     ├─ Complete Event → SSE stream → Client
@@ -125,6 +132,10 @@ Client connection kapanır
     ↓
 Dashboard final verileri gösterir
 ```
+
+### Diğer /api/scan Endpoint'leri
+- `GET /api/scan` → `{ isScanning, startedAt, progress, rateLimitBlockMs }`; sayfa açılışında sunucuda süren scan'i göstermek için
+- `DELETE /api/scan` → aktif scan'i iptal eder (süren bekleme en geç 1 sn içinde kesilir)
 
 ### SSE Event Tipleri
 1. **log** - Her log mesajı için
@@ -285,35 +296,50 @@ NotificationService.showError(user-friendly message)
     └─ ScanOrchestrator.cancelScan()
 ```
 
-### Rate Limiting Mekanizması
+### Rate Limiting Mekanizması (ApiClient.request)
 ```
-Unity API 403 döndürür (abuse detection)
+Her istek önce throttle'dan geçer
+    ├─ İki istek arası en az UNITY_API_MIN_INTERVAL_MS (varsayılan 400 ms)
+    └─ Daha önce rate limit alındıysa blockedUntil dolana kadar hiçbir istek atılmaz
+       (throttle ve blok durumu static: scan + artifact silme aynı anda sürse de tek pencere)
     ↓
-ApiClient retry logic devreye girer
-    ├─ 1. Deneme başarısız → 2 saniye bekle
-    ├─ 2. Deneme başarısız → 4 saniye bekle
-    └─ 3. Deneme başarısız → 8 saniye bekle
+Yanıt sınıflandırılır (ApiError.kind)
+    ├─ rate_limit  → HTTP 429, veya gövdesinde "abuse detection / temporarily blocked" geçen HTTP 403
+    │     Retry-After header'ı varsa o kadar; yoksa 1 → 2 → 5 → 10 → 15 dk (max 10 deneme)
+    │     Bekleme boyunca diğer tüm istekler de bekler (blockedUntil, tüm ApiClient instance'ları ortak)
+    ├─ server / network → 5xx, timeout, fetch hatası: 3s → 6s → 12s → 24s (max 5 deneme)
+    ├─ forbidden   → abuse mesajı olmayan düz 403: 5s, 2 deneme (gerçek yetki hatası olabilir)
+    └─ auth / not_found / client → 401, 404, diğer 4xx: hemen fırlatılır, tekrar denenmez
     ↓
-[Tüm denemeler başarısız ise]
-    └─ ApiError throw et (HTTP 403)
+Her bekleme onWait callback'i ile ScanOrchestrator'a bildirilir
+    └─ SSE log: "Unity API geçici olarak engelledi ... 60 sn bekleniyor (deneme 2/12)"
+    ↓
+Bekleme sırasında shouldCancel kontrol edilir (1 sn aralıklarla)
+    └─ Kullanıcı iptal ederse CancelledError fırlatılır
 ```
 
-### Proje Tarama Rate Limiting
+### Tamamlanamayan Projelerin Yeniden Denenmesi (ScanOrchestrator.startScan)
 ```
-Her proje taraması tamamlandığında:
+Geçiş 1: tüm projeler sırayla taranır
+    ├─ status = completed → sonuç kaydedilir, lastScannedAt set edilir
+    └─ status = partial / failed → sonuç kaydedilir, lastScannedAt set EDİLMEZ, kuyruğa eklenir
     ↓
-500ms bekleme (Unity API abuse detection için)
+[Kuyruk boş değilse ve geçiş hakkı varsa]  (varsayılan maxPasses = 3)
+    ├─ 60 sn soğuma beklenir
+    └─ Geçiş N: yalnızca kuyruktaki projeler yeniden taranır
     ↓
-Bir sonraki projeye geç
+Scan sonu
+    ├─ Hepsi tamamlandı → SUCCESS log
+    └─ Kalan varsa → ERROR log + summary.failedProjects listesi (UI'da kırmızı kutu)
 ```
 
 ### Kritik Noktalar
-- Network errors için automatic retry
-- Authentication errors için immediate user feedback
-- **Rate limiting (403) için exponential backoff** (2s → 4s → 8s)
-- **Proje taramaları arası 500ms delay** (Unity API abuse detection)
+- 403'ün **gövdesine** bakılır: abuse detection mesajı rate limit sayılır, diğer 403'ler yetki hatası
+- Rate limit beklemeleri saniyelik değil **dakikalık**; Unity'nin bloğu bitmeden tekrar istek atmak bloğu uzatır
+- Rate limit 12 denemede de geçmezse veya API key geçersizse (401) scan **tamamen durur**; proje atlanmaz
+- Tek bir target'ta kalıcı hata (404 vb.) projeyi `partial` yapar, scan sürer
+- Yarım kalan projeler cache'e alınmaz; hem aynı scan içindeki sonraki geçişlerde hem de bir sonraki scan'de otomatik yeniden denenir
 - Partial results korunur ve kullanıcıya sunulur
-- Retry mekanizması maksimum 3 deneme yapar
 
 ---
 
@@ -337,14 +363,19 @@ Organization database'e kaydedilir
     │   └─ LogContext.addLog("Cache'den çekildi", SUCCESS)
     │
     └─ [Cache MISS veya EXPIRED]
-        ├─ Unity API'den proje taranır
-        ├─ DatabaseService.saveProject() (lastScannedAt güncellenir)
+        ├─ UnityCloudBuildService.scanProject(): target listesi + her target için build sayısı
+        │   (tek seferde; aynı veri ikinci kez API'den çekilmez)
+        ├─ DatabaseService.saveProject() (lastScannedAt DOKUNULMAZ)
         ├─ DatabaseService.saveScanResult()
         ├─ DatabaseService.saveBuildTarget() (her target için)
-        ├─ DatabaseService.saveBuildCount() (her target için)
+        ├─ DatabaseService.saveBuildCount() (sayımı alınabilen her target için)
+        ├─ [status === completed] DatabaseService.saveProject(lastScannedAt = now)
+        ├─ [status !== completed] lastScannedAt set edilmez → yeniden deneme kuyruğuna girer
         ├─ Result'a isFromCache=false ile ekle
         └─ LogContext.addLog("API'den tarandı", SUCCESS)
 ```
+
+Cache HIT yalnızca son ScanResult'ın status'ü `completed` ise geçerlidir; eski partial kayıtlar yeniden taranır.
 
 ### Cache Temizleme Workflow
 ```
@@ -369,7 +400,8 @@ NotificationService.showSuccess("Cache temizlendi")
 ```
 
 ### Kritik Noktalar
-- Cache TTL (Time To Live): Default 1 saat (cacheMaxAgeMs parametresi ile ayarlanabilir)
+- Cache TTL: varsayılan 1 hafta (`DEFAULT_CACHE_MAX_AGE_MS`, `src/modules/config/cache-config.ts`); hem Cached Projects listesi hem scan'deki cache kontrolü aynı değeri kullanır. `cacheMaxAgeMs` ile scan bazında değiştirilebilir
+- `lastScannedAt` yalnızca eksiksiz tamamlanan taramalarda set edilir (partial/failed projeler cache sayılmaz)
 - Cache kontrolü her scan'de proje bazında yapılır
 - Cache temizleme işlemi cascade delete ile ilgili tüm verileri siler
 - Cache'den gelen projeler status'ünde görsel olarak işaretlenir

@@ -21,6 +21,33 @@ export interface UnityBuildTarget {
   settings?: Record<string, any>;
 }
 
+/** /orgs/{org}/builds listesindeki build kaydı (yalnızca kullandığımız alanlar) */
+export interface UnityBuild {
+  build?: number;
+  buildtargetid?: string;
+  buildTargetName?: string;
+  projectId?: string;
+  projectGuid?: string;
+  projectName?: string;
+  platform?: string;
+  buildStatus?: string;
+  deleted?: boolean;
+  deletedArtifacts?: boolean;
+  created?: string;
+}
+
+/** Org genelindeki build listesinden türetilen, proje bazında toplanmış sayımlar */
+export interface OrgBuildAggregate {
+  /** projectGuid veya projectId → target'lar */
+  projects: Map<string, {
+    projectName?: string;
+    targets: Map<string, { name: string; platform?: string; count: number; withArtifacts: number }>;
+    totalBuilds: number;
+  }>;
+  totalBuilds: number;
+  pages: number;
+}
+
 // Local Database Types
 export interface ProjectData {
   id: string;

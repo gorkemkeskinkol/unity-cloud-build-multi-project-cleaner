@@ -147,6 +147,10 @@ const isValid = CredentialManager.hasValidCredentials();
 
 ## Rate Limiting ve Güvenilir Tarama
 
+Full scan, target başına build saymak yerine organizasyonun **tüm build listesini** sayfalı çeker
+(`/orgs/{org}/builds?per_page=100`): 3600 build için ~40 istek, 650 yerine. Unity'nin abuse detection'ı
+`/builds` uç noktasına ~170 istekten sonra saatlerce ban verdiği için bu tek sürdürülebilir yol.
+
 Unity Cloud Build API, kısa sürede çok istek gelince `403` + "abuse detection" mesajıyla geçici blok uygular. Tarama bunu şöyle yönetir:
 
 - Unity'nin belgelenmiş limiti 100 istek/dk ama yanıt başlıkları gerçek limiti **60/dk** gösteriyor; biz varsayılan **30/dk** ile yarısında kalırız (`UNITY_API_MAX_PER_MINUTE`), istekler arası en az 1,5 sn (`UNITY_API_MIN_INTERVAL_MS`)

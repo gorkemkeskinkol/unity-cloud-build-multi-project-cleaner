@@ -3,7 +3,7 @@ import { ApiError, CancelledError, describeWait } from '@/modules/api/api-client
 import { CredentialManager } from '@/modules/config/credential-manager';
 import { DatabaseService } from '@/modules/database/database-service';
 import { DEFAULT_CACHE_MAX_AGE_MS } from '@/modules/config/cache-config';
-import { ScanOptions, ScanProgress, ProjectScanResult, ScanSummary, UnityProject } from '@/types';
+import { ScanOptions, ScanProgress, ProjectScanResult, ScanSummary, UnityProject, ProjectScanData } from '@/types';
 import type { WaitInfo } from '@/modules/api/api-client';
 
 type LogLevel = 'info' | 'warning' | 'error' | 'success';
@@ -18,6 +18,8 @@ export interface ProjectRef {
 /** Job sistemi gibi dış takipçiler için adım adım kancalar */
 export interface ScanHooks {
   onProjectsListed?: (projects: ProjectRef[]) => Promise<void> | void;
+  /** Org geneli taramada her build sayfası alındığında */
+  onPage?: (page: number, totalPages: number, fetched: number, total: number) => Promise<void> | void;
   onProjectStart?: (project: ProjectRef, pass: number, maxPasses: number) => Promise<void> | void;
   onProjectResult?: (result: ProjectScanResult, pass: number) => Promise<void> | void;
   onWait?: (info: WaitInfo) => Promise<void> | void;
@@ -336,6 +338,106 @@ export class ScanOrchestrator {
     }
   }
 
+  /**
+   * Org geneli tarama: proje listesi (1 istek) + org build listesi (~40 sayfa).
+   * Target başına istek atmadığı için Unity abuse detection'ına takılmaz.
+   * Cache kullanılmaz; her çalıştırmada tüm projeler tazelenir (zaten ucuz).
+   */
+  async startOrgScan(options: ScanOptions = {}, hooks: ScanHooks = {}): Promise<{
+    results: ProjectScanResult[];
+    summary: ScanSummary;
+  }> {
+    if (this.isScanning) {
+      throw new Error('Zaten bir scan işlemi devam ediyor');
+    }
+    const credentials = options.credentials || CredentialManager.getCredentials();
+    if (!credentials) {
+      throw new Error('Unity Cloud Build credentials bulunamadı');
+    }
+
+    this.isScanning = true;
+    this.shouldCancel = false;
+    const unityService = this.createService(credentials.orgId, credentials.apiKey, hooks.onWait);
+    const db = DatabaseService.getInstance();
+    const startTime = Date.now();
+
+    this.log('info', 'Org geneli tarama başlatılıyor (proje listesi + build listesi sayfaları)...');
+
+    try {
+      const projects = await unityService.listProjects();
+      const limitProjects = options.limitProjects || credentials.limitProjects || -1;
+      const projectsToScan = (limitProjects > 0 ? projects.slice(0, limitProjects) : projects).map(toProjectRef);
+      this.log('info', `Toplam proje: ${projects.length} (${projectsToScan.length} raporlanacak)`);
+      await hooks.onProjectsListed?.(projectsToScan);
+      await db.upsertOrganization(credentials.orgId);
+
+      this.updateProgress({ totalProjects: projectsToScan.length, currentProject: 0, currentProjectName: '', isScanning: true, canCancel: true });
+
+      const aggregate = await unityService.aggregateOrgBuilds({
+        onPage: async (page, totalPages, fetched, total) => {
+          if (this.shouldCancel) throw new CancelledError();
+          this.log('info', `Build listesi: sayfa ${page}/${totalPages} (${fetched}/${total} build)`);
+          await hooks.onPage?.(page, totalPages, fetched, total);
+        }
+      });
+      this.log('success', `Build listesi alındı: ${aggregate.totalBuilds} build, ${aggregate.projects.size} projede, ${aggregate.pages} sayfa`);
+
+      // Build listesindeki proje anahtarı guid ya da id olabilir; ikisini de eşle
+      const results: ProjectScanResult[] = [];
+      for (let i = 0; i < projectsToScan.length; i++) {
+        if (this.shouldCancel) throw new CancelledError();
+        const ref = projectsToScan[i];
+        const entry = aggregate.projects.get(ref.projectId);
+        const targets = entry ? Array.from(entry.targets.entries()) : [];
+
+        const data: ProjectScanData = {
+          projectId: ref.projectId,
+          totalBuilds: entry?.totalBuilds ?? 0,
+          targetCount: targets.length,
+          scannedTargets: targets.length,
+          targets: targets.map(([id, t]) => ({ id, name: t.name, platform: t.platform, enabled: true, buildCount: t.count })),
+          errors: []
+        };
+
+        await hooks.onProjectStart?.(ref, 1, 1);
+        const result = await this.persistProjectData(db, credentials.orgId, ref, data, startTime);
+        results.push(result);
+        await hooks.onProjectResult?.(result, 1);
+        this.updateProgress({ currentProject: i + 1, currentProjectName: ref.projectName });
+      }
+
+      // Build listesinde olup proje listesinde olmayan anahtarlar (eski/silinmiş proje) bilgi amaçlı
+      const unmatched = Array.from(aggregate.projects.keys()).filter(k => !projectsToScan.some(p => p.projectId === k));
+      if (unmatched.length > 0 && limitProjects <= 0) {
+        this.log('warning', `${unmatched.length} proje anahtarı proje listesiyle eşleşmedi (örnek: ${unmatched.slice(0, 3).join(', ')}). Bu build'ler sayılmadı.`);
+      }
+
+      const summary: ScanSummary = {
+        totalProjects: projectsToScan.length,
+        completedProjects: results.length,
+        totalBuilds: results.reduce((sum, r) => sum + r.totalBuilds, 0),
+        totalTargets: results.reduce((sum, r) => sum + r.targetCount, 0),
+        totalErrors: 0,
+        cachedProjects: 0,
+        freshProjects: results.length,
+        failedProjects: [],
+        passes: 1,
+        cancelled: false
+      };
+
+      this.log('success', `Scan tamamlandı! ${summary.completedProjects} proje, ${summary.totalBuilds} build, ${summary.totalTargets} target; toplam ${aggregate.pages + 1} API isteği`);
+      this.updateProgress({ currentProject: 0, totalProjects: 0, currentProjectName: '', isScanning: false, canCancel: false });
+      return { results, summary };
+    } catch (error) {
+      const message = error instanceof ApiError ? error.describe() : (error instanceof Error ? error.message : String(error));
+      this.log(error instanceof CancelledError ? 'warning' : 'error', `Org taraması ${error instanceof CancelledError ? 'iptal edildi' : 'başarısız: ' + message}`);
+      throw error;
+    } finally {
+      this.isScanning = false;
+      this.shouldCancel = false;
+    }
+  }
+
   cancelScan(): void {
     this.shouldCancel = true;
     if (this.isScanning) {
@@ -367,7 +469,17 @@ export class ScanOrchestrator {
   ): Promise<ProjectScanResult> {
     const startTime = Date.now();
     const data = await unityService.scanProject(ref.projectId, limitTargets);
+    return this.persistProjectData(db, orgId, ref, data, startTime);
+  }
 
+  /** Hazır tarama verisini (API'den ya da org listesinden) veritabanına yazar */
+  private async persistProjectData(
+    db: DatabaseService,
+    orgId: string,
+    ref: ProjectRef,
+    data: ProjectScanData,
+    startTime: number
+  ): Promise<ProjectScanResult> {
     const status: ProjectScanResult['status'] =
       data.errors.length === 0 ? 'completed' :
       data.scannedTargets > 0 ? 'partial' : 'failed';

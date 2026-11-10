@@ -52,12 +52,12 @@ POST /api/jobs { type, params, credentials }
     ↓
 JobRunner.work()  (tek işçi, sıralı)
     ├─ Job → running
-    ├─ full_scan:   ScanOrchestrator.startScan(options, hooks)
+    ├─ full_scan:   ScanOrchestrator.startOrgScan(options, hooks)  (org build listesi, ~40 istek)
     │     onProjectsListed → JobItem'lar oluşturulur (ilk çalıştırmada)
-    │     onProjectStart   → item running, progress.currentName
-    │     onProjectResult  → item completed/partial/failed, progress.done/failed
+    │     onPage           → progress = sayfa N/M, phase "Build listesi: sayfa N/M"
+    │     onProjectStart/onProjectResult → item completed, phase "Kaydediliyor"
     │     onWait           → progress.phase = "Rate limit: ... bekleniyor", waitingUntil
-    │     onPassCooldown   → progress.phase = "Geçiş N öncesi soğuma"
+    │     Resume: sayfalar baştan alınır (idempotent, ucuz)
     ├─ delete_builds: UnityCloudBuildService.deleteAllBuildsForProject(projectId, { skipTargetIds, hooks })
     │     onTargetsListed / onTargetStart / onTargetDone → item'lar
     │     sonra cache temizlenir ve proje scanSingleProject ile yeniden taranır

@@ -1,5 +1,5 @@
 import { ApiClient, ApiError, CancelledError, WaitInfo } from './api-client';
-import { UnityProject, UnityBuildTarget, ProjectScanData, TargetScanData } from '@/types';
+import { UnityProject, UnityBuildTarget, UnityBuild, ProjectScanData, TargetScanData, OrgBuildAggregate } from '@/types';
 
 export class UnityCloudBuildService {
   private apiClient: ApiClient;
@@ -148,6 +148,78 @@ export class UnityCloudBuildService {
       targets,
       errors
     };
+  }
+
+  /**
+   * Org genelindeki build listesini sayfa sayfa çekip proje/target bazında sayar.
+   *
+   * Neden: target başına /builds çağrısı (per_page=1, Content-Range'den toplam)
+   * 250 proje için ~650 istek demek ve Unity'nin abuse detection'ı ~170 /builds
+   * isteğinden sonra saatlerce ban veriyor. Org listesi 3600 build'i 100'lük
+   * sayfalarla ~40 istekte verir.
+   *
+   * Not: yalnızca en az 1 build'i olan target'lar görünür; boş target'lar
+   * temizlik için zaten önemsizdir.
+   */
+  async aggregateOrgBuilds(options: {
+    perPage?: number;
+    onPage?: (page: number, totalPages: number, fetched: number, total: number) => Promise<void> | void;
+  } = {}): Promise<OrgBuildAggregate> {
+    const orgId = this.apiClient.getOrgId();
+    const perPage = options.perPage ?? 100;
+    const aggregate: OrgBuildAggregate = { projects: new Map(), totalBuilds: 0, pages: 0 };
+
+    let page = 1;
+    let fetched = 0;
+    let total = Infinity;
+    let totalPages = 1;
+
+    while (fetched < total) {
+      const response = await this.apiClient.get(`/orgs/${orgId}/builds`, { per_page: perPage, page });
+      const builds = await response.json() as UnityBuild[];
+      const range = this.apiClient.parseContentRange(response);
+
+      if (range) {
+        total = range.total;
+        totalPages = Math.max(1, Math.ceil(total / perPage));
+      } else if (builds.length < perPage) {
+        total = fetched + builds.length;
+      }
+
+      if (page === 1) {
+        console.log(`[ORG BUILDS] sayfa 1: ${builds.length} kayıt, Content-Range=${response.headers.get('Content-Range')}, örnek alanlar: ${builds[0] ? Object.keys(builds[0]).slice(0, 25).join(',') : '-'}`);
+      }
+
+      for (const build of builds) {
+        const projectKey = build.projectGuid || build.projectId;
+        const targetId = build.buildtargetid;
+        if (!projectKey || !targetId) continue;
+
+        let project = aggregate.projects.get(projectKey);
+        if (!project) {
+          project = { projectName: build.projectName, targets: new Map(), totalBuilds: 0 };
+          aggregate.projects.set(projectKey, project);
+        }
+        let target = project.targets.get(targetId);
+        if (!target) {
+          target = { name: build.buildTargetName || targetId, platform: build.platform, count: 0, withArtifacts: 0 };
+          project.targets.set(targetId, target);
+        }
+        target.count++;
+        project.totalBuilds++;
+        aggregate.totalBuilds++;
+        if (!build.deletedArtifacts && build.buildStatus === 'success') target.withArtifacts++;
+      }
+
+      fetched += builds.length;
+      aggregate.pages = page;
+      await options.onPage?.(page, totalPages, fetched, total === Infinity ? fetched : total);
+
+      if (builds.length === 0) break; // güvenlik: boş sayfa gelirse sonsuz döngüye girme
+      page++;
+    }
+
+    return aggregate;
   }
 
   /**

@@ -173,6 +173,11 @@ class JobRunner {
 
   // ---- full_scan ----
 
+  /**
+   * Full scan = org geneli tarama: 1 proje listesi + ~40 build sayfası.
+   * Resume'da sayfalar baştan alınır (ucuz, idempotent); item'lar proje bazında
+   * takip edilir ve hepsi kaydedildikçe completed olur.
+   */
   private async runFullScan(
     job: JobRecord,
     credentials: Credentials,
@@ -186,68 +191,55 @@ class JobRunner {
       this.bus.log(level, message, source, job.id);
     });
 
-    // Resume: daha önce listelenmiş item'lar varsa yalnızca tamamlanmamışlar taranır
-    const existingItems = await this.store.getItems(job.id);
-    const progress: JobProgress = {
-      total: existingItems.length,
-      done: existingItems.filter(i => i.status === 'completed').length,
-      failed: 0,
-      phase: 'Projeler listeleniyor'
-    };
+    const progress: JobProgress = { total: 0, done: 0, failed: 0, phase: 'Proje listesi alınıyor' };
     await this.publishProgress(job.id, progress);
 
-    const projectsOverride: ProjectRef[] | undefined = existingItems.length > 0
-      ? existingItems.filter(i => i.status !== 'completed').map(i => ({ projectId: i.refId, projectName: i.name }))
-      : undefined;
-
-    if (projectsOverride && projectsOverride.length === 0) {
-      await this.finishJob(job.id, progress, { note: 'Tüm projeler zaten tamamlanmıştı' });
-      return;
-    }
-
-    const { summary } = await orchestrator.startScan(
+    let projectCount = 0;
+    const { summary } = await orchestrator.startOrgScan(
       {
         credentials: { orgId: credentials.orgId, apiKey: credentials.apiKey },
         limitProjects: job.params.limitProjects,
-        limitTargets: job.params.limitTargets,
-        projects: projectsOverride
+        limitTargets: job.params.limitTargets
       },
       {
         onProjectsListed: async (projects) => {
+          projectCount = projects.length;
           await this.store.ensureItems(job.id, 'project', projects.map(p => ({ refId: p.projectId, name: p.projectName })));
-          progress.total = projects.length;
-          progress.phase = 'Taranıyor';
+          progress.phase = 'Build listesi alınıyor';
           await this.publishProgress(job.id, progress);
         },
-        onProjectStart: async (ref, pass, maxPasses) => {
-          await this.store.updateItem(job.id, ref.projectId, { status: 'running', incrementAttempts: true });
-          progress.currentName = ref.projectName;
-          progress.pass = pass;
-          progress.maxPasses = maxPasses;
-          progress.phase = pass > 1 ? `Yeniden deneme geçişi ${pass}/${maxPasses}` : 'Taranıyor';
+        onPage: async (page, totalPages, fetched, total) => {
+          progress.total = totalPages;
+          progress.done = page;
+          progress.phase = `Build listesi: sayfa ${page}/${totalPages} (${fetched}/${total} build)`;
           progress.waitingUntil = null;
+          progress.currentName = undefined;
           await this.publishProgress(job.id, progress);
+        },
+        onProjectStart: async (ref) => {
+          if (progress.phase !== 'Kaydediliyor') {
+            progress.phase = 'Kaydediliyor';
+            progress.total = projectCount;
+            progress.done = 0;
+          }
+          progress.currentName = ref.projectName;
+          await this.store.updateItem(job.id, ref.projectId, { status: 'running', incrementAttempts: true });
         },
         onProjectResult: async (result) => {
           await this.store.updateItem(job.id, result.projectId, {
-            status: result.status === 'completed' ? 'completed' : result.status,
-            error: result.errors.length > 0 ? result.errors.join('; ').slice(0, 500) : null,
-            result: { totalBuilds: result.totalBuilds, targetCount: result.targetCount, scannedTargets: result.scannedTargets, fromCache: result.isFromCache }
+            status: 'completed',
+            error: null,
+            result: { totalBuilds: result.totalBuilds, targetCount: result.targetCount, scannedTargets: result.scannedTargets }
           });
-          const counts = await this.store.countItems(job.id);
-          progress.done = counts.completed;
-          progress.failed = counts.failed;
-          await this.publishProgress(job.id, progress);
+          progress.done++;
+          // Her projede DB'ye yazmak yerine 10'da bir yayınla (UI için yeterli)
+          if (progress.done % 10 === 0 || progress.done === progress.total) {
+            await this.publishProgress(job.id, progress);
+          }
         },
         onWait: async (info) => {
           progress.phase = shortWait(info);
           progress.waitingUntil = new Date(Date.now() + info.waitMs).toISOString();
-          await this.publishProgress(job.id, progress);
-        },
-        onPassCooldown: async (pass, maxPasses, waitMs) => {
-          progress.phase = `Geçiş ${pass}/${maxPasses} öncesi soğuma`;
-          progress.waitingUntil = new Date(Date.now() + waitMs).toISOString();
-          progress.currentName = undefined;
           await this.publishProgress(job.id, progress);
         }
       }
@@ -258,6 +250,7 @@ class JobRunner {
     }
 
     const counts = await this.store.countItems(job.id);
+    progress.total = counts.total;
     progress.done = counts.completed;
     progress.failed = counts.failed;
     await this.finishJob(job.id, progress, {

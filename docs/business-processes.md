@@ -97,10 +97,19 @@ POST /api/jobs { type: 'full_scan', params, credentials }
     ↓
 JobRunner (tek işçi) sıradaki job'ı alır → running
     ↓
-ScanOrchestrator.startScan(options, hooks) çağrılır
+ScanOrchestrator.startOrgScan(options, hooks) çağrılır   (full scan job)
     ├─ options.credentials kullanılır (localStorage DEĞİL!)
+    ├─ 1 istek: /orgs/{org}/projects
+    ├─ ~40 istek: /orgs/{org}/builds?per_page=100&page=N (Content-Range ile sayfa sayısı)
+    │     her build'in projectGuid/projectId + buildtargetid'si proje/target bazında sayılır
+    ├─ Her proje için persistProjectData() → ScanResult, BuildTarget, BuildCount, lastScannedAt
     ├─ Log callback → JobEventBus 'log' → SSE → LogPanel
-    └─ hooks (onProjectStart/onProjectResult/onWait...) → JobItem + Job.progress → SSE → JobsPanel
+    └─ hooks (onPage/onProjectResult/onWait...) → JobItem + Job.progress → SSE → JobsPanel
+
+Neden org listesi: target başına /builds çağrısı (startScan) 250 proje için ~650 istekti ve
+Unity'nin abuse detection'ı ~170 /builds isteğinden sonra saatlerce ban veriyordu (hızdan bağımsız).
+Org listesi aynı bilgiyi ~40 istekte verir. Yalnızca en az 1 build'i olan target'lar görünür.
+startScan (proje bazlı, cache'li, çok geçişli) kodda duruyor; scanSingleProject silme sonrası tek proje için kullanılır.
     ↓
 [GERÇEK ZAMANLI STREAMING: GET /api/jobs/events (EventSource)]
     ↓
@@ -320,9 +329,11 @@ Scan sonu
 - 403'ün **gövdesine** bakılır: abuse detection mesajı rate limit sayılır, diğer 403'ler yetki hatası
 - Scan artık `/orgs/{org}/builds` sanity check'i yapmaz (org'daki tüm build'leri listeleyen en ağır istek); auth kontrolü proje listesiyle olur
 - Rate limit beklemeleri saniyelik değil **dakikalık**; Unity'nin bloğu bitmeden tekrar istek atmak bloğu uzatır
-- Gözlem (10 Kas 2026): X-RateLimit-Limit=60 (belgelerdeki 100 değil). Belgelerdeki 429 hiç görülmedi; ~130 istek/dk
-  hızında 59 proje sonra doğrudan abuse 403 geldi. Ban dakikalık sayaçtan bağımsız (remaining=59 iken bile /builds 403),
-  1 saatten uzun sürdü ve eski kodun 2-4 sn'lik retry'ları onu uzattı. Asıl savunma limiti hiç aşmamak
+- Gözlem (10 Kas 2026): X-RateLimit-Limit=60 (belgelerdeki 100 değil). Belgelerdeki 429 hiç görülmedi. Abuse 403
+  iki kez de ~170-180 /builds isteğinden sonra geldi: bir kez ~130 istek/dk hızında, bir kez 30 istek/dk hızında.
+  Yani tetikleyici hız değil, /builds uç noktasına giden toplam istek sayısı (muhtemelen saatlik pencere).
+  Ban dakikalık sayaçtan bağımsız (remaining=59 iken bile /builds 403), saatlerce sürdü ve her istek onu uzattı.
+  Asıl savunma: /builds'i az çağırmak → full scan org listesini kullanır (~40 istek)
 - Rate limit 12 denemede de geçmezse veya API key geçersizse (401) scan **tamamen durur**; proje atlanmaz
 - Tek bir target'ta kalıcı hata (404 vb.) projeyi `partial` yapar, scan sürer
 - Yarım kalan projeler cache'e alınmaz; hem aynı scan içindeki sonraki geçişlerde hem de bir sonraki scan'de otomatik yeniden denenir

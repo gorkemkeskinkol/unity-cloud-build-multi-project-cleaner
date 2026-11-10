@@ -1,7 +1,7 @@
 import { JobStore } from './job-store';
 import { getJobEventBus } from './job-events';
 import { ScanOrchestrator, ProjectRef } from '@/modules/scanning/scan-orchestrator';
-import { UnityCloudBuildService } from '@/modules/api/unity-cloud-build';
+import { UnityCloudBuildService, isFatal as isFatalForRunner } from '@/modules/api/unity-cloud-build';
 import { ApiError, CancelledError, describeWait, WaitInfo } from '@/modules/api/api-client';
 import { DatabaseService } from '@/modules/database/database-service';
 import { JobRecord, JobType, JobParams, JobProgress } from '@/types/jobs';
@@ -48,7 +48,9 @@ class JobRunner {
     await this.boot();
     const title = type === 'full_scan'
       ? `Full scan${params.limitProjects ? ` (ilk ${params.limitProjects} proje)` : ''}`
-      : `Artifact silme: ${params.projectName || params.projectId}`;
+      : type === 'delete_builds_bulk'
+        ? `Toplu artifact silme: ${params.projects?.length ?? 0} proje`
+        : `Artifact silme: ${params.projectName || params.projectId}`;
     const job = await this.store.createJob(type, title, params);
     this.credentials.set(job.id, credentials);
     this.queue.push(job.id);
@@ -149,10 +151,13 @@ class JobRunner {
     this.bus.log('info', `İş başladı: ${job.title}`, 'Jobs', jobId);
 
     try {
+      const setHook = (hook: () => void) => { cancelHook = () => { cancelled = true; hook(); }; };
       if (job.type === 'full_scan') {
-        await this.runFullScan(job, credentials, (hook) => { cancelHook = () => { cancelled = true; hook(); }; }, () => cancelled);
+        await this.runFullScan(job, credentials, setHook, () => cancelled);
+      } else if (job.type === 'delete_builds_bulk') {
+        await this.runDeleteBuildsBulk(job, credentials, setHook, () => cancelled);
       } else {
-        await this.runDeleteBuilds(job, credentials, (hook) => { cancelHook = () => { cancelled = true; hook(); }; }, () => cancelled);
+        await this.runDeleteBuilds(job, credentials, setHook, () => cancelled);
       }
     } catch (error) {
       const message = error instanceof ApiError ? error.describe() : (error instanceof Error ? error.message : String(error));
@@ -257,6 +262,7 @@ class JobRunner {
       totalProjects: summary.totalProjects,
       completedProjects: summary.completedProjects,
       totalBuilds: summary.totalBuilds,
+      artifactBuilds: summary.artifactBuilds,
       totalTargets: summary.totalTargets,
       cachedProjects: summary.cachedProjects,
       freshProjects: summary.freshProjects,
@@ -344,6 +350,7 @@ class JobRunner {
           limitTargets: job.params.limitTargets
         });
         rescan = { totalBuilds: scanResult.totalBuilds, status: scanResult.status };
+        this.bus.log('info', `${projectName}: ${scanResult.totalBuilds} build, ${scanResult.artifactBuilds} artifact'li`, 'DeleteBuilds', job.id);
       } catch (error) {
         if (error instanceof CancelledError) throw error;
         const message = error instanceof ApiError ? error.describe() : String(error);
@@ -357,6 +364,112 @@ class JobRunner {
       errors: result.errors,
       rescan
     });
+  }
+
+  // ---- delete_builds_bulk ----
+
+  /**
+   * Seçili projelerin artifact'lerini sırayla siler (item = proje). Resume'da
+   * tamamlanmış projeler atlanır; yarım kalan proje baştan alınır (silme idempotent).
+   * Sonunda tek bir org geneli tarama ile tüm sayılar tazelenir (~40 istek);
+   * proje başına yeniden tarama yapılmaz.
+   */
+  private async runDeleteBuildsBulk(
+    job: JobRecord,
+    credentials: Credentials,
+    setCancelHook: (hook: () => void) => void,
+    isCancelled: () => boolean
+  ): Promise<void> {
+    const projects = job.params.projects ?? [];
+    if (projects.length === 0) throw new Error('delete_builds_bulk için projects gerekli');
+
+    const service = new UnityCloudBuildService(credentials.orgId, credentials.apiKey);
+    service.setCancelCheck(isCancelled);
+    setCancelHook(() => { /* isCancelled yeterli */ });
+
+    await this.store.ensureItems(job.id, 'project', projects.map(p => ({ refId: p.id, name: p.name })));
+    const existing = await this.store.getItems(job.id);
+    const done = new Set(existing.filter(i => i.status === 'completed').map(i => i.refId));
+
+    const progress: JobProgress = { total: projects.length, done: done.size, failed: 0, phase: 'Artifact siliniyor' };
+    service.setWaitCallback(async (info) => {
+      this.bus.log('warning', describeWait(info), 'DeleteBuilds', job.id);
+      progress.phase = shortWait(info);
+      progress.waitingUntil = new Date(Date.now() + info.waitMs).toISOString();
+      await this.publishProgress(job.id, progress);
+    });
+    await this.publishProgress(job.id, progress);
+
+    const summary: Array<{ projectId: string; projectName: string; deletedTargets: number; totalTargets: number; errors: number }> = [];
+    let failedProjects = 0;
+
+    for (const project of projects) {
+      if (isCancelled()) throw new CancelledError();
+      if (done.has(project.id)) continue;
+
+      progress.currentName = project.name;
+      progress.phase = 'Artifact siliniyor';
+      progress.waitingUntil = null;
+      await this.store.updateItem(job.id, project.id, { status: 'running', incrementAttempts: true });
+      await this.publishProgress(job.id, progress);
+      this.bus.log('info', `${project.name}: artifact silme başlıyor`, 'DeleteBuilds', job.id);
+
+      try {
+        const result = await service.deleteAllBuildsForProject(project.id, {
+          onTargetDone: async (_targetId, targetName, error) => {
+            this.bus.log(error ? 'error' : 'success', error ? `${project.name} / ${targetName}: ${error}` : `✓ ${project.name} / ${targetName} artifact'leri silindi`, 'DeleteBuilds', job.id);
+          }
+        });
+        const ok = result.errors.length === 0;
+        await this.store.updateItem(job.id, project.id, {
+          status: ok ? 'completed' : 'partial',
+          error: ok ? null : result.errors.map(e => `${e.targetName}: ${e.error}`).join('; ').slice(0, 500),
+          result: { deletedTargets: result.deletedTargets, totalTargets: result.totalTargets }
+        });
+        summary.push({ projectId: project.id, projectName: project.name, deletedTargets: result.deletedTargets, totalTargets: result.totalTargets, errors: result.errors.length });
+        if (ok) progress.done++; else { failedProjects++; progress.failed++; }
+      } catch (error) {
+        if (isFatalForRunner(error)) throw error;
+        const message = error instanceof ApiError ? error.describe() : String(error);
+        await this.store.updateItem(job.id, project.id, { status: 'failed', error: message.slice(0, 500) });
+        summary.push({ projectId: project.id, projectName: project.name, deletedTargets: 0, totalTargets: 0, errors: 1 });
+        failedProjects++;
+        progress.failed++;
+        this.bus.log('error', `${project.name}: ${message}`, 'DeleteBuilds', job.id);
+      }
+      await this.publishProgress(job.id, progress);
+    }
+
+    // Tek seferde tüm sayıları tazele (proje başına rescan yerine)
+    let refreshed = false;
+    if (job.params.updateCache !== false) {
+      progress.phase = 'Sayılar tazeleniyor (org taraması)';
+      progress.currentName = undefined;
+      await this.publishProgress(job.id, progress);
+      const orchestrator = new ScanOrchestrator();
+      setCancelHook(() => orchestrator.cancelScan());
+      orchestrator.setLogCallback((level, message, source) => this.bus.log(level, message, source, job.id));
+      try {
+        await orchestrator.startOrgScan({ credentials: { orgId: credentials.orgId, apiKey: credentials.apiKey } }, {
+          onPage: async (page, totalPages) => {
+            progress.phase = `Sayılar tazeleniyor: sayfa ${page}/${totalPages}`;
+            await this.publishProgress(job.id, progress);
+          },
+          onWait: async (info) => {
+            progress.phase = shortWait(info);
+            progress.waitingUntil = new Date(Date.now() + info.waitMs).toISOString();
+            await this.publishProgress(job.id, progress);
+          }
+        });
+        refreshed = true;
+      } catch (error) {
+        if (error instanceof CancelledError) throw error;
+        const message = error instanceof ApiError ? error.describe() : String(error);
+        this.bus.log('warning', `Sayılar tazelenemedi: ${message}. Bir sonraki full scan'de güncellenir.`, 'DeleteBuilds', job.id);
+      }
+    }
+
+    await this.finishJob(job.id, progress, { projects: summary, failedProjects, refreshed });
   }
 
   // ---- helpers ----

@@ -202,6 +202,7 @@ export class ScanOrchestrator {
               projectId: ref.projectId,
               projectName: ref.projectName,
               totalBuilds: 0,
+              artifactBuilds: 0,
               targetCount: 0,
               scannedTargets: 0,
               status: 'failed',
@@ -233,6 +234,7 @@ export class ScanOrchestrator {
               projectId: ref.projectId,
               projectName: ref.projectName,
               totalBuilds: 0,
+              artifactBuilds: 0,
               targetCount: 0,
               scannedTargets: 0,
               status: 'failed',
@@ -252,6 +254,7 @@ export class ScanOrchestrator {
         totalProjects: projectsToScan.length,
         completedProjects: orderedResults.filter(r => r.status === 'completed').length,
         totalBuilds: orderedResults.reduce((sum, r) => sum + r.totalBuilds, 0),
+        artifactBuilds: orderedResults.reduce((sum, r) => sum + r.artifactBuilds, 0),
         totalTargets: orderedResults.reduce((sum, r) => sum + r.targetCount, 0),
         totalErrors: failed.length,
         cachedProjects,
@@ -393,9 +396,10 @@ export class ScanOrchestrator {
         const data: ProjectScanData = {
           projectId: ref.projectId,
           totalBuilds: entry?.totalBuilds ?? 0,
+          artifactBuilds: targets.reduce((sum, [, t]) => sum + t.withArtifacts, 0),
           targetCount: targets.length,
           scannedTargets: targets.length,
-          targets: targets.map(([id, t]) => ({ id, name: t.name, platform: t.platform, enabled: true, buildCount: t.count })),
+          targets: targets.map(([id, t]) => ({ id, name: t.name, platform: t.platform, enabled: true, buildCount: t.count, artifactCount: t.withArtifacts })),
           errors: []
         };
 
@@ -416,6 +420,7 @@ export class ScanOrchestrator {
         totalProjects: projectsToScan.length,
         completedProjects: results.length,
         totalBuilds: results.reduce((sum, r) => sum + r.totalBuilds, 0),
+        artifactBuilds: results.reduce((sum, r) => sum + r.artifactBuilds, 0),
         totalTargets: results.reduce((sum, r) => sum + r.targetCount, 0),
         totalErrors: 0,
         cachedProjects: 0,
@@ -425,7 +430,7 @@ export class ScanOrchestrator {
         cancelled: false
       };
 
-      this.log('success', `Scan tamamlandı! ${summary.completedProjects} proje, ${summary.totalBuilds} build, ${summary.totalTargets} target; toplam ${aggregate.pages + 1} API isteği`);
+      this.log('success', `Scan tamamlandı! ${summary.completedProjects} proje, ${summary.totalBuilds} build (${summary.artifactBuilds} artifact'li), ${summary.totalTargets} target; toplam ${aggregate.pages + 1} API isteği`);
       this.updateProgress({ currentProject: 0, totalProjects: 0, currentProjectName: '', isScanning: false, canCancel: false });
       return { results, summary };
     } catch (error) {
@@ -497,6 +502,7 @@ export class ScanOrchestrator {
       projectId: ref.projectId,
       status,
       totalBuilds: data.totalBuilds,
+      artifactBuilds: data.artifactBuilds,
       totalTargets: data.targetCount,
       scannedTargets: data.scannedTargets,
       errorMessage: data.errors.length > 0 ? data.errors.join('; ') : undefined,
@@ -514,7 +520,7 @@ export class ScanOrchestrator {
         enabled: target.enabled
       });
       if (target.buildCount !== null) {
-        await db.saveBuildCount(target.id, target.buildCount, scanResultId);
+        await db.saveBuildCount(target.id, target.buildCount, scanResultId, target.artifactCount ?? 0);
       }
     }
 
@@ -532,6 +538,7 @@ export class ScanOrchestrator {
       projectId: ref.projectId,
       projectName: ref.projectName,
       totalBuilds: data.totalBuilds,
+      artifactBuilds: data.artifactBuilds,
       targetCount: data.targetCount,
       scannedTargets: data.scannedTargets,
       status,
@@ -552,6 +559,7 @@ export class ScanOrchestrator {
       projectId: ref.projectId,
       projectName: ref.projectName,
       totalBuilds: latest.totalBuilds,
+      artifactBuilds: latest.artifactBuilds ?? 0,
       targetCount: latest.totalTargets,
       scannedTargets: latest.scannedTargets,
       status: latest.status,

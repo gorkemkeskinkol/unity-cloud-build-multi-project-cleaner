@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, AppShell, Badge, Button, Code, Grid, Group, Modal, NumberInput, Paper, Stack, Text, Title, Tooltip
+  Alert, AppShell, Badge, Button, Code, Grid, Group, List, Modal, NumberInput, Paper, ScrollArea, Stack, Text, Title, Tooltip
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconAlertTriangle, IconLogout, IconPlayerPlay, IconPlayerStop } from '@tabler/icons-react';
@@ -25,6 +25,7 @@ export function Dashboard({ config }: { config: AppConfig }) {
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CachedProject | null>(null);
+  const [bulkDeleteTargets, setBulkDeleteTargets] = useState<CachedProject[] | null>(null);
   const [isCreatingDelete, setIsCreatingDelete] = useState(false);
 
   const loadProjects = useCallback(async () => {
@@ -98,6 +99,21 @@ export function Dashboard({ config }: { config: AppConfig }) {
     }
   };
 
+  const confirmBulkDelete = async () => {
+    if (!bulkDeleteTargets || bulkDeleteTargets.length === 0) return;
+    try {
+      setIsCreatingDelete(true);
+      const job = await createJob('delete_builds_bulk', {
+        projects: bulkDeleteTargets.map(p => ({ id: p.id, name: p.name })),
+        updateCache: true
+      });
+      if (job) addLog('success', `${bulkDeleteTargets.length} proje için toplu artifact silme işi sıraya alındı`, 'DeleteBuilds');
+    } finally {
+      setIsCreatingDelete(false);
+      setBulkDeleteTargets(null);
+    }
+  };
+
   const resetCredentials = () => {
     CredentialManager.clearCredentials();
     window.location.reload();
@@ -167,6 +183,7 @@ export function Dashboard({ config }: { config: AppConfig }) {
                 busy={isClearingCache}
                 onClearCache={clearCache}
                 onDeleteBuilds={setDeleteTarget}
+                onDeleteBuildsBulk={setBulkDeleteTargets}
               />
             </Stack>
           </Grid.Col>
@@ -190,6 +207,30 @@ export function Dashboard({ config }: { config: AppConfig }) {
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setDeleteTarget(null)} disabled={isCreatingDelete}>Vazgeç</Button>
             <Button color="red" onClick={confirmDelete} loading={isCreatingDelete}>Artifact&apos;leri sil</Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal opened={!!bulkDeleteTargets} onClose={() => setBulkDeleteTargets(null)} title={`${bulkDeleteTargets?.length ?? 0} projenin tüm build artifact'lerini sil`} centered size="lg">
+        <Stack gap="md">
+          <Text size="sm">
+            Aşağıdaki projelerin <Text span fw={700}>tüm</Text> build artifact&apos;leri Unity Cloud Build&apos;den kalıcı olarak silinecek.
+            Toplam <Text span fw={700}>{bulkDeleteTargets?.reduce((s, p) => s + (p.artifactBuilds ?? 0), 0) ?? 0}</Text> artifact&apos;li build.
+          </Text>
+          <ScrollArea.Autosize mah={240}>
+            <List size="sm" spacing={2}>
+              {bulkDeleteTargets?.map(p => (
+                <List.Item key={p.id}>
+                  {p.name} <Text span c="dimmed" size="xs">({p.artifactBuilds ?? 0} artifact&apos;li build)</Text>
+                </List.Item>
+              ))}
+            </List>
+          </ScrollArea.Autosize>
+          <Alert color="red" icon={<IconAlertTriangle size={18} />}>
+            Bu işlem geri alınamaz. Projeler sırayla işlenir; iş yarım kalırsa tamamlananlar atlanarak devam eder. Sonunda sayılar tek bir org taramasıyla tazelenir.
+          </Alert>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setBulkDeleteTargets(null)} disabled={isCreatingDelete}>Vazgeç</Button>
+            <Button color="red" onClick={confirmBulkDelete} loading={isCreatingDelete}>{bulkDeleteTargets?.length ?? 0} projenin artifact&apos;lerini sil</Button>
           </Group>
         </Stack>
       </Modal>

@@ -75,78 +75,61 @@ export class UnityCloudBuildService {
   }
 
   /**
-   * Bir projeyi tek seferde tarar: target listesi + her target'ın build sayısı.
-   * Sonuç hem toplamları hem de target bazında detayı içerir; çağıran taraf
-   * aynı veriyi tekrar API'den çekmek zorunda kalmaz.
-   *
-   * - Tek bir target'ta kalıcı hata olursa o target `buildCount: null` ile işaretlenir, tarama sürer.
-   * - Rate limit beklemeleri tükendiyse veya iptal edildiyse hata yukarı fırlatılır
-   *   (devam etmenin anlamı yok; orkestratör karar verir).
+   * Bir projeyi tarar: /orgs/{org}/projects/{p}/builds listesi 100'lük sayfalarla
+   * çekilir, target bazında build ve artifact'i duran build sayılır.
+   * Çoğu proje için 1 istek (eski yöntem: 1 + target sayısı, Content-Range ile).
+   * Yalnızca en az 1 build'i olan target'lar görünür.
    */
   async scanProject(projectId: string, limitTargets?: number): Promise<ProjectScanData> {
-    const errors: string[] = [];
-    const targets: TargetScanData[] = [];
+    const orgId = this.apiClient.getOrgId();
+    const perPage = 100;
+    const targets = new Map<string, TargetScanData>();
     let totalBuilds = 0;
-    let scannedTargets = 0;
+    let artifactBuilds = 0;
+    let page = 1;
+    let fetched = 0;
+    let total = Infinity;
 
-    let rawTargets: UnityBuildTarget[];
-    try {
-      rawTargets = await this.listBuildTargets(projectId);
-    } catch (error) {
-      if (isFatal(error)) throw error;
-      const message = error instanceof ApiError ? error.describe() : String(error);
-      return {
-        projectId,
-        totalBuilds: 0,
-        targetCount: 0,
-        scannedTargets: 0,
-        targets: [],
-        errors: [`buildtargets alınamadı: ${message}`]
-      };
-    }
+    while (fetched < total) {
+      const response = await this.apiClient.get(`/orgs/${orgId}/projects/${projectId}/builds`, { per_page: perPage, page });
+      const builds = await response.json() as UnityBuild[];
+      const range = this.apiClient.parseContentRange(response);
+      if (range) total = range.total;
+      else if (builds.length < perPage) total = fetched + builds.length;
 
-    const targetCount = rawTargets.length;
-    console.log(`  Hedef sayısı: ${targetCount}`);
-    const targetsToProcess = limitTargets ? rawTargets.slice(0, limitTargets) : rawTargets;
-
-    for (const target of targetsToProcess) {
-      const buildTargetId = target.buildtargetid || target.buildTargetId;
-      if (!buildTargetId) {
-        errors.push(`buildtargetid yok, anahtarlar: ${Object.keys(target).join(', ')}`);
-        continue;
+      for (const build of builds) {
+        const targetId = build.buildtargetid;
+        if (!targetId) continue;
+        let target = targets.get(targetId);
+        if (!target) {
+          target = { id: targetId, name: build.buildTargetName || targetId, platform: build.platform, enabled: true, buildCount: 0, artifactCount: 0 };
+          targets.set(targetId, target);
+        }
+        target.buildCount = (target.buildCount ?? 0) + 1;
+        totalBuilds++;
+        if (hasArtifacts(build)) {
+          target.artifactCount = (target.artifactCount ?? 0) + 1;
+          artifactBuilds++;
+        }
       }
 
-      const entry: TargetScanData = {
-        id: buildTargetId,
-        name: target.name || buildTargetId,
-        platform: target.platform,
-        enabled: target.enabled ?? true,
-        buildCount: null
-      };
-
-      try {
-        const count = await this.countBuilds(projectId, buildTargetId);
-        entry.buildCount = count;
-        totalBuilds += count;
-        scannedTargets++;
-      } catch (error) {
-        if (isFatal(error)) throw error;
-        const message = error instanceof ApiError ? error.describe() : String(error);
-        entry.error = message;
-        errors.push(`${entry.name}: ${message}`);
-        console.error(`[COUNT_BUILDS ERROR] projectId=${projectId}, targetId=${buildTargetId}: ${message}`);
-      }
-
-      targets.push(entry);
+      fetched += builds.length;
+      if (builds.length === 0) break;
+      page++;
     }
+
+    const list = Array.from(targets.values());
+    const limited = limitTargets ? list.slice(0, limitTargets) : list;
+    console.log(`  ${projectId}: ${totalBuilds} build (${artifactBuilds} artifact'li), ${list.length} target, ${page} sayfa`);
 
     return {
       projectId,
-      totalBuilds,
-      targetCount,
-      scannedTargets,
-      targets,
-      errors
+      totalBuilds: limited.reduce((sum, t) => sum + (t.buildCount ?? 0), 0),
+      artifactBuilds: limited.reduce((sum, t) => sum + (t.artifactCount ?? 0), 0),
+      targetCount: list.length,
+      scannedTargets: limited.length,
+      targets: limited,
+      errors: []
     };
   }
 
@@ -208,7 +191,7 @@ export class UnityCloudBuildService {
         target.count++;
         project.totalBuilds++;
         aggregate.totalBuilds++;
-        if (!build.deletedArtifacts && build.buildStatus === 'success') target.withArtifacts++;
+        if (hasArtifacts(build)) target.withArtifacts++;
       }
 
       fetched += builds.length;
@@ -313,6 +296,11 @@ export class UnityCloudBuildService {
 
     return { deletedTargets, totalTargets, skippedTargets, errors };
   }
+}
+
+/** Artifact'i hâlâ duran build: başarılı ve artifact'leri silinmemiş */
+function hasArtifacts(build: UnityBuild): boolean {
+  return build.buildStatus === 'success' && !build.deletedArtifacts && !build.deleted;
 }
 
 /** Devam etmenin anlamsız olduğu hatalar: iptal, tükenmiş rate limit, geçersiz key */

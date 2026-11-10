@@ -165,6 +165,8 @@ Full scan ve artifact silme **job** olarak çalışır (`docs/job-system.md`):
 - İşler sıraya alınır ve tek tek çalışır; dashboard'daki **Jobs** panelinde durum, ilerleme çubuğu, aşama ("Rate limit: 5 dk bekleniyor") ve geri sayım görünür
 - Sekmeyi kapatsanız da iş sürer; servis kapanıp açılırsa iş "Yarım kaldı" olur ve dashboard açıldığında **kaldığı yerden** otomatik devam eder (tamamlanmış projeler/target'lar tekrar işlenmez)
 - Eksikli biten full scan için "Eksikleri tekrar dene" yalnızca tamamlanamayan projeleri tarar
+- Tabloda birden çok proje seçip **toplu artifact silme** başlatılabilir; projeler sırayla işlenir, yarım kalırsa tamamlananlar atlanır
+- Tablodaki **Artifact'li** sütunu artifact'i hâlâ duran build sayısıdır (silme sonrası sıfıra iner); Build sütunu kayıt sayısıdır ve silmeyle değişmez
 - API key veritabanına yazılmaz; resume için tarayıcıdaki kayıtlı key kullanılır
 - Tamamlanamayan projeler scan sonunda 60 sn soğumadan sonra yeniden denenir (3 geçiş)
 - Yarım kalan projeler cache'e alınmaz; bir sonraki scan'de otomatik olarak tekrar taranır

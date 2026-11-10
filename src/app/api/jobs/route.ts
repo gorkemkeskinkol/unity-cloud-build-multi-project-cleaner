@@ -33,8 +33,8 @@ export async function POST(request: NextRequest) {
   }
 
   const { type, params, credentials } = body;
-  if (type !== 'full_scan' && type !== 'delete_builds') {
-    return NextResponse.json({ error: 'type full_scan veya delete_builds olmalı' }, { status: 400 });
+  if (type !== 'full_scan' && type !== 'delete_builds' && type !== 'delete_builds_bulk') {
+    return NextResponse.json({ error: 'type full_scan, delete_builds veya delete_builds_bulk olmalı' }, { status: 400 });
   }
   if (!credentials?.orgId || !credentials?.apiKey) {
     return NextResponse.json({ error: 'Unity Cloud Build credentials eksik' }, { status: 401 });
@@ -45,6 +45,12 @@ export async function POST(request: NextRequest) {
   if (type === 'delete_builds' && !params?.projectId) {
     return NextResponse.json({ error: 'delete_builds için params.projectId gerekli' }, { status: 400 });
   }
+  const bulkProjects = Array.isArray(params?.projects)
+    ? params!.projects!.filter(p => p && typeof p.id === 'string' && p.id).map(p => ({ id: p.id, name: typeof p.name === 'string' && p.name ? p.name : p.id }))
+    : [];
+  if (type === 'delete_builds_bulk' && bulkProjects.length === 0) {
+    return NextResponse.json({ error: 'delete_builds_bulk için params.projects gerekli' }, { status: 400 });
+  }
 
   const jobParams: JobParams = {
     orgId: credentials.orgId,
@@ -52,6 +58,7 @@ export async function POST(request: NextRequest) {
     limitTargets: params?.limitTargets || undefined,
     projectId: params?.projectId,
     projectName: params?.projectName,
+    projects: type === 'delete_builds_bulk' ? bulkProjects : undefined,
     updateCache: params?.updateCache
   };
 

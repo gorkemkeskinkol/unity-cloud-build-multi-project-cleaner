@@ -1,6 +1,6 @@
 // Job sistemi tipleri (server ve client ortak)
 
-export type JobType = 'full_scan' | 'delete_builds';
+export type JobType = 'full_scan' | 'delete_builds' | 'delete_builds_bulk';
 
 export type JobStatus =
   | 'queued'       // sırada, henüz başlamadı
@@ -19,6 +19,8 @@ export interface JobParams {
   /** delete_builds için */
   projectId?: string;
   projectName?: string;
+  /** delete_builds_bulk için */
+  projects?: Array<{ id: string; name: string }>;
   updateCache?: boolean;
 }
 

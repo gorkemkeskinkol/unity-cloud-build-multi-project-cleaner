@@ -130,7 +130,8 @@ export class DatabaseService {
         description: p.description || undefined,
         lastScannedAt: p.lastScannedAt || undefined,
         platforms: platforms.length > 0 ? platforms : undefined,
-        totalBuilds: totalBuilds > 0 ? totalBuilds : undefined
+        totalBuilds: totalBuilds > 0 ? totalBuilds : undefined,
+        artifactBuilds: latestScanResult?.artifactBuilds ?? 0
       };
     });
   }
@@ -194,6 +195,7 @@ export class DatabaseService {
       update: {
         status: scanData.status,
         totalBuilds: scanData.totalBuilds,
+        artifactBuilds: scanData.artifactBuilds ?? 0,
         totalTargets: scanData.totalTargets,
         scannedTargets: scanData.scannedTargets,
         errorMessage: scanData.errorMessage,
@@ -204,6 +206,7 @@ export class DatabaseService {
         projectId: scanData.projectId,
         status: scanData.status,
         totalBuilds: scanData.totalBuilds,
+        artifactBuilds: scanData.artifactBuilds ?? 0,
         totalTargets: scanData.totalTargets,
         scannedTargets: scanData.scannedTargets,
         errorMessage: scanData.errorMessage,
@@ -229,6 +232,7 @@ export class DatabaseService {
       projectId: result.projectId,
       status: result.status as 'completed' | 'failed' | 'partial',
       totalBuilds: result.totalBuilds,
+      artifactBuilds: result.artifactBuilds,
       totalTargets: result.totalTargets,
       scannedTargets: result.scannedTargets,
       errorMessage: result.errorMessage || undefined,
@@ -238,11 +242,12 @@ export class DatabaseService {
     };
   }
 
-  async saveBuildCount(buildTargetId: string, count: number, scanResultId: string): Promise<void> {
+  async saveBuildCount(buildTargetId: string, count: number, scanResultId: string, artifactCount = 0): Promise<void> {
     await this.prisma.buildCount.create({
       data: {
         buildTargetId,
         count,
+        artifactCount,
         scanResultId
       }
     });

@@ -56,6 +56,7 @@ model BuildCount {
   id            Int         @id @default(autoincrement())
   buildTargetId String
   count         Int         @default(0)
+  artifactCount Int         @default(0) // artifact'i hâlâ duran (silinmemiş, başarılı) build sayısı
   scannedAt     DateTime    @default(now())
   scanResultId  String
   
@@ -70,6 +71,7 @@ model ScanResult {
   projectId        String
   status           String   // "completed", "failed", "partial"
   totalBuilds      Int      @default(0)
+  artifactBuilds   Int      @default(0) // artifact'i hâlâ duran build sayısı (temizlik için asıl metrik)
   totalTargets     Int      @default(0)
   scannedTargets   Int      @default(0)
   errorMessage     String?

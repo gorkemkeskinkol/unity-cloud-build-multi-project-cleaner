@@ -57,6 +57,8 @@ export interface ProjectData {
   lastScannedAt?: Date;
   platforms?: string[];
   totalBuilds?: number;
+  /** Artifact'i hâlâ duran build sayısı */
+  artifactBuilds?: number;
 }
 
 export interface BuildTargetData {
@@ -72,6 +74,7 @@ export interface ScanResult {
   projectId: string;
   status: 'completed' | 'failed' | 'partial';
   totalBuilds: number;
+  artifactBuilds?: number;
   totalTargets: number;
   scannedTargets: number;
   errorMessage?: string;
@@ -137,6 +140,8 @@ export interface TargetScanData {
   enabled: boolean;
   /** null ise sayım alınamadı (error dolu olur) */
   buildCount: number | null;
+  /** artifact'i duran build sayısı (bilinmiyorsa null) */
+  artifactCount?: number | null;
   error?: string;
 }
 
@@ -144,6 +149,8 @@ export interface TargetScanData {
 export interface ProjectScanData {
   projectId: string;
   totalBuilds: number;
+  /** artifact'i duran build sayısı */
+  artifactBuilds: number;
   targetCount: number;
   scannedTargets: number;
   targets: TargetScanData[];
@@ -154,6 +161,7 @@ export interface ProjectScanResult {
   projectId: string;
   projectName: string;
   totalBuilds: number;
+  artifactBuilds: number;
   targetCount: number;
   scannedTargets: number;
   status: 'completed' | 'failed' | 'partial';
@@ -166,6 +174,7 @@ export interface ScanSummary {
   totalProjects: number;
   completedProjects: number;
   totalBuilds: number;
+  artifactBuilds: number;
   totalTargets: number;
   totalErrors: number;
   cachedProjects: number; // Cache'den gelen proje sayısı

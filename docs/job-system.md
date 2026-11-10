@@ -30,6 +30,8 @@ JobItem  (iş birimi: full_scan → proje, delete_builds → build target)
 
 ## Durumlar
 
+Job tipleri: `full_scan`, `delete_builds` (tek proje), `delete_builds_bulk` (seçili projeler).
+
 | Job status    | Anlamı |
 |---------------|--------|
 | `queued`      | Sırada; önündeki iş bitince başlar |
@@ -59,8 +61,13 @@ JobRunner.work()  (tek işçi, sıralı)
     │     onWait           → progress.phase = "Rate limit: ... bekleniyor", waitingUntil
     │     Resume: sayfalar baştan alınır (idempotent, ucuz)
     ├─ delete_builds: UnityCloudBuildService.deleteAllBuildsForProject(projectId, { skipTargetIds, hooks })
-    │     onTargetsListed / onTargetStart / onTargetDone → item'lar
+    │     onTargetsListed / onTargetStart / onTargetDone → item'lar (target)
     │     sonra cache temizlenir ve proje scanSingleProject ile yeniden taranır
+    │     (proje build listesi: 1-2 istek, artifact sayısı dahil)
+    ├─ delete_builds_bulk: params.projects sırayla; item = proje
+    │     tamamlanan projeler resume'da atlanır, yarım kalan proje baştan alınır (silme idempotent)
+    │     tek target'ta hata → proje partial, devam; rate limit tükenmesi / 401 → iş durur
+    │     sonunda proje başına rescan DEĞİL, tek bir startOrgScan ile tüm sayılar tazelenir (~40 istek)
     └─ Job → completed | failed | cancelled, result yazılır
     ↓
 Her adımda JobEventBus.emit({ kind: 'job' | 'log' })

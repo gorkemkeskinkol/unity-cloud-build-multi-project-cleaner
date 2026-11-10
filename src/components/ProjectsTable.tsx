@@ -11,10 +11,12 @@ export interface CachedProject {
   name: string;
   platforms?: string[];
   totalBuilds?: number;
+  /** artifact'i hâlâ duran build sayısı */
+  artifactBuilds?: number;
   lastScannedAt?: string;
 }
 
-type SortField = 'name' | 'totalBuilds' | 'lastScannedAt';
+type SortField = 'name' | 'totalBuilds' | 'artifactBuilds' | 'lastScannedAt';
 
 interface Props {
   projects: CachedProject[];
@@ -22,11 +24,12 @@ interface Props {
   busy: boolean;
   onClearCache: (projectIds: string[]) => void;
   onDeleteBuilds: (project: CachedProject) => void;
+  onDeleteBuildsBulk: (projects: CachedProject[]) => void;
 }
 
-export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDeleteBuilds }: Props) {
+export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDeleteBuilds, onDeleteBuildsBulk }: Props) {
   const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<{ field: SortField; dir: 'asc' | 'desc' }>({ field: 'totalBuilds', dir: 'desc' });
+  const [sort, setSort] = useState<{ field: SortField; dir: 'asc' | 'desc' }>({ field: 'artifactBuilds', dir: 'desc' });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
 
@@ -38,6 +41,7 @@ export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDelet
       let cmp = 0;
       if (sort.field === 'name') cmp = a.name.localeCompare(b.name);
       else if (sort.field === 'totalBuilds') cmp = (a.totalBuilds ?? 0) - (b.totalBuilds ?? 0);
+      else if (sort.field === 'artifactBuilds') cmp = (a.artifactBuilds ?? 0) - (b.artifactBuilds ?? 0);
       else cmp = (a.lastScannedAt ? Date.parse(a.lastScannedAt) : 0) - (b.lastScannedAt ? Date.parse(b.lastScannedAt) : 0);
       if (cmp === 0) cmp = a.name.localeCompare(b.name);
       return cmp * sign;
@@ -45,6 +49,8 @@ export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDelet
   }, [projects, query, sort]);
 
   const totalBuilds = useMemo(() => projects.reduce((s, p) => s + (p.totalBuilds ?? 0), 0), [projects]);
+  const totalArtifacts = useMemo(() => projects.reduce((s, p) => s + (p.artifactBuilds ?? 0), 0), [projects]);
+  const selectedProjects = useMemo(() => projects.filter(p => selected.has(p.id)), [projects, selected]);
 
   const toggleSort = (field: SortField) => {
     setSort(prev => prev.field === field
@@ -96,20 +102,31 @@ export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDelet
         <Group gap="sm">
           <Title order={5}>Projeler</Title>
           <Badge variant="light" color="gray">{projects.length}</Badge>
-          <Text size="xs" c="dimmed">toplam {totalBuilds} build</Text>
+          <Text size="xs" c="dimmed">{totalBuilds} build · {totalArtifacts} artifact&apos;li</Text>
         </Group>
         <Group gap="xs">
           {selected.size > 0 && (
-            <Button
-              size="xs"
-              color="red"
-              variant="light"
-              leftSection={<IconDatabaseOff size={14} />}
-              loading={busy}
-              onClick={() => { onClearCache(Array.from(selected)); setSelected(new Set()); }}
-            >
-              Seçili {selected.size} projenin cache&apos;ini temizle
-            </Button>
+            <>
+              <Button
+                size="xs"
+                color="red"
+                leftSection={<IconTrash size={14} />}
+                disabled={busy}
+                onClick={() => onDeleteBuildsBulk(selectedProjects)}
+              >
+                Seçili {selected.size} projenin artifact&apos;lerini sil
+              </Button>
+              <Button
+                size="xs"
+                color="gray"
+                variant="light"
+                leftSection={<IconDatabaseOff size={14} />}
+                loading={busy}
+                onClick={() => { onClearCache(Array.from(selected)); setSelected(new Set()); }}
+              >
+                Cache&apos;ten çıkar
+              </Button>
+            </>
           )}
           <TextInput
             size="xs"
@@ -132,16 +149,17 @@ export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDelet
               <SortHeader field="name">Proje</SortHeader>
               <Table.Th>Platform</Table.Th>
               <SortHeader field="totalBuilds" align="right">Build</SortHeader>
+              <SortHeader field="artifactBuilds" align="right">Artifact&apos;li</SortHeader>
               <SortHeader field="lastScannedAt">Son tarama</SortHeader>
               <Table.Th w={40} />
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {isLoading ? (
-              <Table.Tr><Table.Td colSpan={6}><Text size="sm" c="dimmed">Yükleniyor...</Text></Table.Td></Table.Tr>
+              <Table.Tr><Table.Td colSpan={7}><Text size="sm" c="dimmed">Yükleniyor...</Text></Table.Td></Table.Tr>
             ) : rows.length === 0 ? (
               <Table.Tr>
-                <Table.Td colSpan={6}>
+                <Table.Td colSpan={7}>
                   <Text size="sm" c="dimmed" fs="italic" py="md" ta="center">
                     {projects.length === 0 ? 'Henüz taranmış proje yok. Full scan başlatın.' : 'Aramaya uyan proje yok.'}
                   </Text>
@@ -167,7 +185,14 @@ export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDelet
                   </Group>
                 </Table.Td>
                 <Table.Td style={{ textAlign: 'right' }}>
-                  <Text size="sm" fw={600} c={(project.totalBuilds ?? 0) >= 50 ? 'orange' : undefined}>{project.totalBuilds ?? 0}</Text>
+                  <Text size="sm" c="dimmed">{project.totalBuilds ?? 0}</Text>
+                </Table.Td>
+                <Table.Td style={{ textAlign: 'right' }}>
+                  <Tooltip label="Artifact'i (APK/IPA vb.) hâlâ duran başarılı build sayısı; silme sonrası sıfıra iner">
+                    <Text size="sm" fw={600} c={(project.artifactBuilds ?? 0) === 0 ? 'dimmed' : (project.artifactBuilds ?? 0) >= 50 ? 'orange' : undefined}>
+                      {project.artifactBuilds ?? 0}
+                    </Text>
+                  </Tooltip>
                 </Table.Td>
                 <Table.Td>
                   <Text size="xs" c="dimmed">{project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString('tr-TR', { hour12: false }) : '-'}</Text>

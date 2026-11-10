@@ -8,6 +8,7 @@ export interface FullScanResult {
   totalProjects: number;
   completedProjects: number;
   totalBuilds: number;
+  artifactBuilds?: number;
   totalTargets: number;
   cachedProjects: number;
   freshProjects: number;
@@ -37,7 +38,7 @@ export function ScanSummary({ job, result }: { job: JobRecord; result: FullScanR
       </Title>
       <SimpleGrid cols={{ base: 2, md: 4 }} spacing="sm">
         <Stat label="Proje" value={result.totalProjects} hint={`${result.cachedProjects} cache, ${result.freshProjects} yeni`} />
-        <Stat label="Build" value={result.totalBuilds} />
+        <Stat label="Build" value={result.totalBuilds} hint={result.artifactBuilds !== undefined ? `${result.artifactBuilds} artifact'li` : undefined} />
         <Stat label="Target" value={result.totalTargets} />
         <Stat
           label="Tamamlanamayan"

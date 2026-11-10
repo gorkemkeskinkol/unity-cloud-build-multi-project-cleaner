@@ -6,30 +6,34 @@ const NEXTJS_API_BASE = '/api/unity';
 const UNITY_API_BASE = 'https://build-api.cloud.unity3d.com/api/v1';
 
 /**
- * Unity Build Automation API'nin belgelenmiş limiti 100 istek/dakika
- * (https://build-api.cloud.unity3d.com/docs/). Limit aşımında belgelere göre 429
- * dönmesi gerekir; pratikte ise doğrudan "abuse detection" 403'ü ile uzun süreli
- * (10+ dk) geçici ban geliyor ve ban süresince atılan her istek banı uzatıyor.
- * Bu yüzden limitin çok altında kalırız: varsayılan 60 istek/dk, üç katmanlı koruma:
+ * Unity Build Automation API limiti: belgeler 100 istek/dk der
+ * (https://build-api.cloud.unity3d.com/docs/) ama yanıt başlıkları gerçek değeri
+ * verir: X-RateLimit-Limit: 60 (10 Kas 2026'da gözlendi). Limit aşımında belgelere
+ * göre 429 dönmesi gerekir; pratikte doğrudan "abuse detection" 403'ü geliyor, bu
+ * ban saatlerce sürüyor, dakikalık sayaç sıfırlansa bile (remaining=59) devam ediyor
+ * ve ban süresince atılan her istek onu uzatıyor gibi davranıyor.
+ * Bu yüzden limitin yarısında kalırız (aynı API key'i CI vb. de kullanabilir):
+ * varsayılan 30 istek/dk, üç katmanlı koruma:
  *   1) istekler arası minimum aralık,
  *   2) kayan 60 sn penceresinde istek bütçesi,
  *   3) X-RateLimit-Remaining düşünce X-RateLimit-Reset'e kadar bekleme.
  */
-const DEFAULT_MAX_REQUESTS_PER_MINUTE = Number(process.env.UNITY_API_MAX_PER_MINUTE) || 60;
+const DEFAULT_MAX_REQUESTS_PER_MINUTE = Number(process.env.UNITY_API_MAX_PER_MINUTE) || 30;
 /** İstekler arası minimum bekleme (ms) */
-const DEFAULT_MIN_INTERVAL_MS = Number(process.env.UNITY_API_MIN_INTERVAL_MS) || 1_000;
+const DEFAULT_MIN_INTERVAL_MS = Number(process.env.UNITY_API_MIN_INTERVAL_MS) || 1_500;
 /** X-RateLimit-Remaining bu değerin altına inince reset'e kadar beklenir */
 const RATE_LIMIT_HEADER_RESERVE = 10;
 /** Tek istek için zaman aşımı */
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * Rate limit (abuse detection) bekleme planı. Unity bloğu dakikalar sürüyor ve
- * blok sürerken atılan her istek pencereyi uzatıyor gibi davranıyor; bu yüzden
- * seyrek yoklarız: 1 → 2 → 5 → 10 → 15 dk. Retry-After header'ı varsa o öncelikli.
+ * Rate limit (abuse detection) bekleme planı. Unity'nin abuse banı saatlerce
+ * sürebiliyor ve ban sürerken atılan her istek onu uzatıyor gibi davranıyor; bu
+ * yüzden giderek seyrek yoklarız: 2 → 5 → 15 → 30 → 60 dk (toplam ~5 saat).
+ * Sunucu süre söylüyorsa (Retry-After vb.) o öncelikli.
  */
-const RATE_LIMIT_WAIT_SCHEDULE_MS = [60_000, 120_000, 300_000, 600_000, 900_000];
-const RATE_LIMIT_MAX_ATTEMPTS = 10;
+const RATE_LIMIT_WAIT_SCHEDULE_MS = [120_000, 300_000, 900_000, 1_800_000, 3_600_000];
+const RATE_LIMIT_MAX_ATTEMPTS = 8;
 
 /** Geçici sunucu / ağ hataları için bekleme planı */
 const TRANSIENT_WAIT_SCHEDULE_MS = [3_000, 6_000, 12_000, 24_000];

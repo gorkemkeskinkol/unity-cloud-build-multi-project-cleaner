@@ -315,6 +315,7 @@ Scan sonu
 
 ### Kritik Noktalar
 - 403'ün **gövdesine** bakılır: abuse detection mesajı rate limit sayılır, diğer 403'ler yetki hatası
+- Scan artık `/orgs/{org}/builds` sanity check'i yapmaz (org'daki tüm build'leri listeleyen en ağır istek); auth kontrolü proje listesiyle olur
 - Rate limit beklemeleri saniyelik değil **dakikalık**; Unity'nin bloğu bitmeden tekrar istek atmak bloğu uzatır
 - Rate limit 12 denemede de geçmezse veya API key geçersizse (401) scan **tamamen durur**; proje atlanmaz
 - Tek bir target'ta kalıcı hata (404 vb.) projeyi `partial` yapar, scan sürer

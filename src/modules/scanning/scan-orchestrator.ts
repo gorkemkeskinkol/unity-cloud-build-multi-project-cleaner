@@ -88,8 +88,10 @@ export class ScanOrchestrator {
     this.log('info', `ORG_ID=${credentials.orgId}`);
 
     try {
-      const orgTotalBuilds = await unityService.sanityCheckOrg();
-      this.log('info', `Organizasyon toplam build sayısı: ${orgTotalBuilds}`);
+      // Not: eski kodda burada /orgs/{org}/builds ile "sanity check" yapılıyordu.
+      // O uç nokta organizasyondaki tüm build'leri listelediği için ağır ve
+      // rate limit'e en çabuk takılan istek; kimlik doğrulama zaten proje
+      // listesinde (401 → fatal) yapıldığından kaldırıldı.
 
       let initialQueue: ProjectRef[];
       if (options.projects) {

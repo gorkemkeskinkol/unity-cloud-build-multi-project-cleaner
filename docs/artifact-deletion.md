@@ -2,8 +2,9 @@
 
 > Güncel akış: silme işleri job olarak çalışır (`docs/job-system.md`). Tek proje için `delete_builds`,
 > tabloda seçilen birden çok proje için `delete_builds_bulk`. Toplu silmede projeler sırayla işlenir,
-> sonunda sayılar tek bir org taramasıyla tazelenir. Tablodaki **Artifact'li** sütunu (artifact'i hâlâ duran
-> başarılı build sayısı) silme sonrası sıfıra iner; **Build** sütunu build kayıtlarını saydığı için değişmez. System
+> sonunda sayılar tek bir org taramasıyla tazelenir. Tablodaki **Artifact'li** sütunu artifact'i hâlâ duran
+> başarılı build sayısıdır, **Build** tüm kayıtlardır. Gözlem (10 Kas 2026): Unity artifact'i silinen build'leri
+> build listelerinden düşürüyor (deleted sayılıyor), bu yüzden silme sonrası iki sayı da sıfıra iner. System
 
 ## Genel Bakış
 Unity Cloud Build'den build artifact'lerini silme özelliği, projelerin disk alanını yönetmek için kullanılır. Bu sistem, Unity Cloud Build API'sinin artifact silme endpoint'lerini kullanarak tüm build artifact'lerini (APK, IPA, vb.) kalıcı olarak siler.

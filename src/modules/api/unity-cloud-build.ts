@@ -234,7 +234,16 @@ export class UnityCloudBuildService {
     const endpoint = `/orgs/${orgId}/projects/${projectId}/buildtargets/${encodedBuildTargetId}/builds/artifacts`;
     console.log(`[DELETE_ARTIFACTS] Endpoint: ${endpoint}`);
 
-    await this.apiClient.delete(endpoint);
+    try {
+      await this.apiClient.delete(endpoint);
+    } catch (error) {
+      // 404: target'ın silinecek artifact'i yok (hiç build'i yok ya da zaten temiz). Hata değil.
+      if (error instanceof ApiError && error.kind === 'not_found') {
+        console.log(`[DELETE_ARTIFACTS] ${buildTargetId}: silinecek artifact yok (404), temiz sayıldı`);
+        return;
+      }
+      throw error;
+    }
   }
 
   /**

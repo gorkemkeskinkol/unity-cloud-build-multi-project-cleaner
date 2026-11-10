@@ -188,7 +188,7 @@ export function ProjectsTable({ projects, isLoading, busy, onClearCache, onDelet
                   <Text size="sm" c="dimmed">{project.totalBuilds ?? 0}</Text>
                 </Table.Td>
                 <Table.Td style={{ textAlign: 'right' }}>
-                  <Tooltip label="Artifact'i (APK/IPA vb.) hâlâ duran başarılı build sayısı; silme sonrası sıfıra iner">
+                  <Tooltip label="Başarılı ve artifact'i (APK/IPA vb.) hâlâ duran build sayısı. Build sütunu başarısız/iptal build'leri de sayar.">
                     <Text size="sm" fw={600} c={(project.artifactBuilds ?? 0) === 0 ? 'dimmed' : (project.artifactBuilds ?? 0) >= 50 ? 'orange' : undefined}>
                       {project.artifactBuilds ?? 0}
                     </Text>
